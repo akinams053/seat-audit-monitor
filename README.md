@@ -29,7 +29,9 @@ seat-audit-monitor/
     ├── SeatAuditMonitorServiceProvider.php  # 服务提供者，插件注册总入口
     │
     ├── Config/
-    │   └── seat-audit-monitor.permission.php  # 权限定义配置
+    │   ├── seat-audit-monitor.sidebar.php   # 侧边栏菜单配置（package.sidebar 格式）
+    │   └── Permissions/
+    │       └── permissions.php              # 权限定义（registerPermissions 注册到 Gate）
     │
     ├── Console/
     │   └── Commands/
@@ -39,7 +41,7 @@ seat-audit-monitor/
     │   ├── Controllers/
     │   │   ├── ViolationController.php     # 违规记录查看控制器
     │   │   └── AdminController.php         # 物品/白名单管理控制器
-    │   └── routes.php                      # 路由定义（按权限分层）
+    │   └── routes.php                      # 路由定义
     │
     ├── Jobs/
     │   └── AuditWalletTransactionsJob.php  # 核心增量审计后台 Job
@@ -172,73 +174,104 @@ chunk(500) 批量读取 character_wallet_transactions WHERE id > last_id
 
 ---
 
-## 安装
+## 安装（Bare Metal / 非 Docker 环境）
 
 ### 环境要求
 
 - PHP 7.4
 - Eve SeAT 4.x（基于 Laravel 8.x / 9.x）
 - Composer
+- MySQL / MariaDB
 
-### 步骤一：安装插件包
+> 以下所有命令均在 SeAT 安装根目录下执行（通常为 `/var/www/seat` 或你自定义的路径）。
 
-在 SeAT 宿主项目根目录执行：
+### 方式一：通过 Composer 安装（推荐）
 
 ```bash
-composer require akinams053/seat-audit-monitor
+# 1. 切换到 SeAT 安装目录
+cd /var/www/seat
+
+# 2. 以 www-data 用户安装插件包（SeAT 文件属主通常为 www-data）
+sudo -u www-data composer require akinams053/seat-audit-monitor
+
+# 3. 运行数据库迁移，创建插件所需的四张表
+sudo -u www-data php artisan migrate
+
+# 4. 发布并刷新缓存
+sudo -u www-data php artisan config:cache
+sudo -u www-data php artisan route:cache
+
+# 5. 重启队列进程（如果你使用 Supervisor 管理队列）
+sudo supervisorctl restart seat:*
 ```
 
-或者，如果通过本地路径开发调试，在宿主项目的 `composer.json` 中添加：
+### 方式二：通过本地路径安装（开发调试）
+
+如果你是从 Git 仓库克隆到服务器本地目录进行开发调试：
+
+**1. 克隆仓库到 SeAT 同级目录**
+
+```bash
+cd /var/www
+git clone https://github.com/akinams053/seat-audit-monitor.git
+```
+
+**2. 在 SeAT 的 `composer.json` 中添加本地仓库源**
+
+在 SeAT 安装目录的 `composer.json` 中添加 `repositories` 配置：
 
 ```json
-"repositories": [
-    {
-        "type": "path",
-        "url": "../seat-audit-monitor"
-    }
-],
-"require": {
-    "akinams053/seat-audit-monitor": "*"
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../seat-audit-monitor"
+        }
+    ]
 }
 ```
 
-然后执行：
+**3. 安装并执行迁移**
 
 ```bash
-composer update akinams053/seat-audit-monitor
+cd /var/www/seat
+
+# 安装插件（使用 @dev 版本，因为本地路径没有版本标签）
+sudo -u www-data composer require akinams053/seat-audit-monitor:@dev
+
+# 运行数据库迁移
+sudo -u www-data php artisan migrate
+
+# 刷新缓存
+sudo -u www-data php artisan config:cache
+sudo -u www-data php artisan route:cache
 ```
 
-### 步骤二：运行数据库迁移
+### 安装后配置
 
-```bash
-php artisan migrate
-```
+#### 1. 分配权限
 
-执行后将创建四张 `seat_audit_` 前缀的数据库表。
-
-### 步骤三：分配权限
-
-登录 SeAT 管理后台，进入 **Administration → Roles**，为对应角色分配以下权限：
+登录 SeAT 管理后台，进入 **Settings → Access Management**，创建或编辑角色：
 
 - `seat-audit-monitor.view`：分配给需要查看违规记录的成员
 - `seat-audit-monitor.admin`：分配给需要管理监控名单的管理员
 
-### 步骤四：配置监控名单
+#### 2. 配置监控名单
 
 以具有 `admin` 权限的账号登录 SeAT，通过侧边栏进入：
 
-- **审计监控 → 管理监控名单**：添加需要监控的 Eve 物品（填写 `type_id` 和物品名称）
-- **审计监控 → 管理白名单**：将豁免角色加入白名单
+- **审计监控 → 监控物品**：添加需要监控的 Eve 物品（填写 `type_id` 和物品名称）
+- **审计监控 → 白名单**：将豁免角色加入白名单
 
-### 步骤五：触发首次扫描
+#### 3. 触发首次扫描
 
 手动触发一次扫描以建立初始水位线：
 
 ```bash
-php artisan seat:audit:scan
+sudo -u www-data php artisan seat:audit:scan
 ```
 
-### （可选）配置定时自动扫描
+#### 4.（可选）配置定时自动扫描
 
 在 SeAT 宿主项目的 `app/Console/Kernel.php` 中注册定时任务：
 
@@ -251,6 +284,23 @@ protected function schedule(Schedule $schedule)
     $schedule->job(new AuditWalletTransactionsJob)->hourly();
 }
 ```
+
+### 安装验证
+
+安装完成后，按以下步骤确认插件是否正常工作：
+
+1. 登录 SeAT，检查侧边栏是否出现 **审计监控** 菜单组
+2. 点击 **违规记录** 子菜单，应能正常打开违规列表页（首次安装时为空）
+3. 如果你有 `admin` 权限，点击 **监控物品** 和 **白名单** 子菜单，确认管理页面可正常访问
+4. 在 SeAT 的 **Settings → SeAT Settings → SeAT Module Versions** 中确认 `seat-audit-monitor v1.0.0` 出现在已安装插件列表中
+
+> 如果安装后遇到 500 错误，尝试执行以下命令清理所有缓存：
+> ```bash
+> sudo -u www-data php artisan config:clear
+> sudo -u www-data php artisan route:clear
+> sudo -u www-data php artisan view:clear
+> sudo -u www-data php artisan cache:clear
+> ```
 
 ---
 

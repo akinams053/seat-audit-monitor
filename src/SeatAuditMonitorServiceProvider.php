@@ -24,13 +24,15 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
         // 注册视图命名空间，模板中通过 seat-audit-monitor::violations.index 调用
         $this->loadViewsFrom(__DIR__ . '/resources/views', 'seat-audit-monitor');
 
-        // 注册权限配置，SeAT ACL 系统从此处读取权限列表
-        $this->mergeConfigFrom(
-            __DIR__ . '/Config/seat-audit-monitor.permission.php',
-            'seat-audit-monitor.permission'
+        // 注册权限定义，使用 SeAT 4.x Gate 权限系统
+        // scope 为 'seat-audit-monitor'，ability 由配置文件的数组键名决定
+        // 最终生成的 Gate 标识：seat-audit-monitor.view / seat-audit-monitor.admin
+        $this->registerPermissions(
+            __DIR__ . '/Config/Permissions/permissions.php',
+            'seat-audit-monitor'
         );
 
-        // 注册侧边栏菜单项，仅对具备 seat-audit-monitor.view 权限的用户可见
+        // 注册侧边栏菜单项
         // SeAT web 包通过合并 'package.sidebar' 配置键来渲染侧边栏
         $this->mergeConfigFrom(
             __DIR__ . '/Config/seat-audit-monitor.sidebar.php',

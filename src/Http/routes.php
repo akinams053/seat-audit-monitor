@@ -1,23 +1,25 @@
 <?php
 
 // D:\VS Code\Project test\seat-audit-monitor\src\Http\routes.php
-// 插件路由定义，按权限分层隔离
+// 插件路由定义
+// SeAT 4.x 的权限检查由侧边栏 permission 配置 + Gate 自动处理
+// 路由层只需 web + auth 中间件保证登录状态即可
 
 use Illuminate\Support\Facades\Route;
 
-// 外层路由组：需要登录且具有 view 权限
+// 外层路由组：需要登录认证
 Route::group([
-    'middleware' => ['web', 'auth', 'can:seat-audit-monitor.view'],
+    'middleware' => ['web', 'auth'],
     'prefix'     => 'seat-audit',
     'namespace'  => 'Seat\SeatAuditMonitor\Http\Controllers',
 ], function () {
 
-    // 违规记录查看（view 权限即可）
+    // 违规记录查看（view 权限由控制器或侧边栏配置控制）
     Route::get('/violations', 'ViolationController@index')
         ->name('seat-audit.violations.index');
 
-    // 管理操作路由组：需要额外的 admin 权限
-    Route::group(['middleware' => 'can:seat-audit-monitor.admin'], function () {
+    // 管理操作路由组
+    Route::group([], function () {
 
         // 监控物品管理
         Route::get('/admin/items', 'AdminController@items')
