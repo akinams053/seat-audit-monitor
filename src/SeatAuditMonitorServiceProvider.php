@@ -74,4 +74,20 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
     {
         return '1.0.0';
     }
+
+    /**
+     * 返回 Packagist 包名（composer.json 中 name 字段的包名部分）
+     */
+    public function getPackagistPackageName(): string
+    {
+        return 'seat-audit-monitor';
+    }
+
+    /**
+     * 返回 Packagist 供应商名（composer.json 中 name 字段的 vendor 部分）
+     */
+    public function getPackagistVendorName(): string
+    {
+        return 'akinams053';
+    }
 }

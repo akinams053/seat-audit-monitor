@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(git -C \"D:\\\\VS Code\\\\Project test\\\\seat-audit-monitor\" log --oneline -10)",
+      "Bash(git push:*)"
+    ]
+  }
+}
