@@ -1,0 +1,34 @@
+{
+    "name": "akinams053/seat-audit-monitor",
+    "description": "Eve SeAT 角色钱包交易审计监控插件",
+    "type": "seat-plugin",
+    "require": {
+        "php": "^7.4",
+        "eveseat/services": "^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Seat\\SeatAuditMonitor\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "akinams053",
+            "homepage": "https://github.com/akinams053"
+        }
+    ],
+    "extra": {
+        "seat": {
+            "name": "Seat Audit Monitor",
+            "package": "seat-audit-monitor",
+            "migrations": "src/database/migrations"
+        },
+        "laravel": {
+            "providers": [
+                "Seat\\SeatAuditMonitor\\SeatAuditMonitorServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
