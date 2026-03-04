@@ -8,19 +8,32 @@
 @section('full')
 <div class="row">
     <div class="col-12">
+
+        {{-- 操作反馈提示（审计扫描结果等） --}}
+        @if(session('success'))
+        <div class="alert alert-success">{{ session('success') }}</div>
+        @endif
+
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">违规交易记录</h3>
-                @can('seat-audit-monitor.admin')
                 <div class="card-tools">
-                    <a href="{{ route('seat-audit.admin.items') }}" class="btn btn-sm btn-primary">
+                    {{-- 立即审查按钮，POST 表单防止刷新重复触发 --}}
+                    <form method="POST" action="{{ route('seat-audit.violations.scan') }}" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="btn btn-sm btn-warning">
+                            <i class="fas fa-search"></i> 立即审查
+                        </button>
+                    </form>
+                    @can('seat-audit-monitor.admin')
+                    <a href="{{ route('seat-audit.admin.items') }}" class="btn btn-sm btn-primary ml-1">
                         <i class="fas fa-cog"></i> 管理监控名单
                     </a>
                     <a href="{{ route('seat-audit.admin.whitelist') }}" class="btn btn-sm btn-secondary ml-1">
                         <i class="fas fa-user-shield"></i> 管理白名单
                     </a>
+                    @endcan
                 </div>
-                @endcan
             </div>
             <div class="card-body p-0">
                 @if($violations->isEmpty())

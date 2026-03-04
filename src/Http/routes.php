@@ -14,9 +14,13 @@ Route::group([
     'namespace'  => 'Seat\SeatAuditMonitor\Http\Controllers',
 ], function () {
 
-    // 违规记录查看（view 权限由控制器或侧边栏配置控制）
+    // 违规记录查看
     Route::get('/violations', 'ViolationController@index')
         ->name('seat-audit.violations.index');
+
+    // 手动触发审计扫描（POST 防止意外刷新重复触发）
+    Route::post('/violations/scan', 'ViolationController@scan')
+        ->name('seat-audit.violations.scan');
 
     // 管理操作路由组
     Route::group([], function () {
