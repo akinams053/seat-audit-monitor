@@ -5,7 +5,7 @@
 
 @section('title', '白名单管理')
 
-@section('content')
+@section('full')
 <div class="row">
     <div class="col-12">
 
@@ -95,4 +95,4 @@
         </div>
     </div>
 </div>
-@endsection
+@stop

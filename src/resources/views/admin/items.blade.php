@@ -5,7 +5,7 @@
 
 @section('title', '监控物品管理')
 
-@section('content')
+@section('full')
 <div class="row">
     <div class="col-12">
 
@@ -93,4 +93,4 @@
         </div>
     </div>
 </div>
-@endsection
+@stop

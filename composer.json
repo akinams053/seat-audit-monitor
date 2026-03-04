@@ -1,6 +1,7 @@
 {
     "name": "akinams053/seat-audit-monitor",
     "description": "Eve SeAT 角色钱包交易审计监控插件",
+    "license": "GPL-2.0-only",
     "type": "seat-plugin",
     "require": {
         "php": "^7.4",

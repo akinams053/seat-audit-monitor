@@ -5,7 +5,7 @@
 
 @section('title', '违规交易记录')
 
-@section('content')
+@section('full')
 <div class="row">
     <div class="col-12">
         <div class="card">
@@ -56,4 +56,4 @@
         </div>
     </div>
 </div>
-@endsection
+@stop
