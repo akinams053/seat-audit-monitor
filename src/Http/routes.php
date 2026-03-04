@@ -37,4 +37,10 @@ Route::group([
         Route::delete('/admin/whitelist/{id}', 'AdminController@destroyWhitelist')
             ->name('seat-audit.admin.whitelist.destroy');
     });
+
+    // AJAX API 路由（供前端自动补全和名称查询使用）
+    Route::get('/api/characters', 'AdminController@searchCharacters')
+        ->name('seat-audit.api.characters');
+    Route::get('/api/item-name', 'AdminController@getItemName')
+        ->name('seat-audit.api.item-name');
 });
