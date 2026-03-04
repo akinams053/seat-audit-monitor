@@ -94,7 +94,8 @@
     </div>
 </div>
 
-{{-- 物品名称自动查询脚本（使用 SeAT 已内置的 jQuery） --}}
+{{-- 物品名称自动查询脚本，通过 @push 注入到 SeAT 布局的 javascript 栈中 --}}
+@push('javascript')
 <script>
 $(function() {
     var typeIdInput = $('#type-id-input');
@@ -135,4 +136,5 @@ $(function() {
     });
 });
 </script>
+@endpush
 @stop

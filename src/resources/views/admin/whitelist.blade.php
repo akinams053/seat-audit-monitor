@@ -98,7 +98,8 @@
     </div>
 </div>
 
-{{-- 角色搜索自动补全脚本（使用 SeAT 已内置的 jQuery） --}}
+{{-- 角色搜索自动补全脚本，通过 @push 注入到 SeAT 布局的 javascript 栈中 --}}
+@push('javascript')
 <script>
 $(function() {
     var searchInput = $('#character-search');
@@ -169,4 +170,5 @@ $(function() {
     });
 });
 </script>
+@endpush
 @stop
