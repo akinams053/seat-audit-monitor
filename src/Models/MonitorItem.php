@@ -5,9 +5,9 @@
 
 namespace Seat\SeatAuditMonitor\Models;
 
-use Seat\Services\Models\ExtensibleModel;
+use Illuminate\Database\Eloquent\Model;
 
-class MonitorItem extends ExtensibleModel
+class MonitorItem extends Model
 {
     protected $table = 'seat_audit_monitor_items';
 
