@@ -18,14 +18,14 @@
             <div class="card-header">
                 <h3 class="card-title">违规交易记录</h3>
                 <div class="card-tools">
-                    {{-- 立即审查按钮，POST 表单防止刷新重复触发 --}}
+                    @can('seat-audit-monitor.admin')
+                    {{-- 立即审查按钮，POST 表单防止刷新重复触发，仅管理员可见 --}}
                     <form method="POST" action="{{ route('seat-audit.violations.scan') }}" style="display: inline;">
                         @csrf
                         <button type="submit" class="btn btn-sm btn-warning">
                             <i class="fas fa-search"></i> 立即审查
                         </button>
                     </form>
-                    @can('seat-audit-monitor.admin')
                     <a href="{{ route('seat-audit.admin.items') }}" class="btn btn-sm btn-primary ml-1">
                         <i class="fas fa-cog"></i> 管理监控名单
                     </a>

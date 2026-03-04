@@ -52,6 +52,12 @@ class AuditWalletTransactionsJob implements ShouldQueue
             return;
         }
 
+        // 步骤4：预加载角色名映射（character_id => name）
+        // character_wallet_transactions 表不含角色名，需从 character_infos 表获取
+        $characterNames = DB::table('character_infos')
+            ->pluck('name', 'character_id')
+            ->toArray();
+
         // 记录本次扫描处理到的最大 ID，用于结束后更新水位线
         $maxProcessedId = $lastId;
 
@@ -63,6 +69,7 @@ class AuditWalletTransactionsJob implements ShouldQueue
             ->chunk(self::CHUNK_SIZE, function ($records) use (
                 $whitelistIds,
                 $monitoredItems,
+                $characterNames,
                 &$maxProcessedId
             ) {
                 // 本批次待插入的违规记录集合（批量插入以减少数据库往返次数）
@@ -96,10 +103,10 @@ class AuditWalletTransactionsJob implements ShouldQueue
                     // character_name 和 item_name 均采用快照存储，防止历史记录因名称变更而失真
                     $violations[] = [
                         'character_id'   => $record->character_id,
-                        // 角色名快照：直接从原始交易记录中读取（若无则标记 Unknown）
-                        'character_name' => property_exists($record, 'character_name')
-                            ? $record->character_name
-                            : 'Unknown',
+                        // 角色名快照：从预加载的 character_infos 映射中读取
+                        'character_name' => isset($characterNames[$record->character_id])
+                            ? $characterNames[$record->character_id]
+                            : 'Unknown (ID: ' . $record->character_id . ')',
                         'type_id'        => $record->type_id,
                         // 物品名快照：从预加载的监控物品映射中读取
                         'item_name'      => $monitoredItems[$record->type_id],
