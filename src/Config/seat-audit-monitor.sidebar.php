@@ -13,12 +13,15 @@ return [
         'icon'          => 'fas fa-exclamation-triangle',
         // 路由前缀段，用于 SeAT 判断当前菜单高亮状态
         'route_segment' => 'seat-audit',
+        // 整个菜单组的可见权限，无此权限的用户不会看到侧边栏入口
+        'permission'    => 'seat-audit-monitor.view',
         // 子菜单条目列表
         'entries'       => [
             [
-                'name'  => '违规记录',
-                'icon'  => 'fas fa-list',
-                'route' => 'seat-audit.violations.index',
+                'name'       => '违规记录',
+                'icon'       => 'fas fa-list',
+                'route'      => 'seat-audit.violations.index',
+                'permission' => 'seat-audit-monitor.view',
             ],
             [
                 'name'       => '监控物品',
