@@ -22,6 +22,10 @@ Route::group([
     Route::post('/violations/scan', 'ViolationController@scan')
         ->name('seat-audit.violations.scan');
 
+    // 导出违规记录为 CSV（支持时间区间筛选）
+    Route::get('/violations/export', 'ViolationController@export')
+        ->name('seat-audit.violations.export');
+
     // 管理操作路由组
     Route::group([], function () {
 
