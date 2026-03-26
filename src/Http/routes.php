@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Http\routes.php
+// src/Http/routes.php
 // 插件路由定义
 // SeAT 4.x 的权限检查由侧边栏 permission 配置 + Gate 自动处理
 // 路由层只需 web + auth 中间件保证登录状态即可

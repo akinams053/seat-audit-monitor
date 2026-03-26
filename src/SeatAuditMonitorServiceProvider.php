@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\SeatAuditMonitorServiceProvider.php
+// src/SeatAuditMonitorServiceProvider.php
 // 插件服务提供者，负责向 Laravel/SeAT 注册所有插件资源
 
 namespace Seat\SeatAuditMonitor;
@@ -24,7 +24,7 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
         // 注册视图命名空间，模板中通过 seat-audit-monitor::violations.index 调用
         $this->loadViewsFrom(__DIR__ . '/resources/views', 'seat-audit-monitor');
 
-        // 注册权限定义，使用 SeAT 4.x Gate 权限系统
+        // 注册权限定义，使用 SeAT Gate 权限系统
         // scope 为 'seat-audit-monitor'，ability 由配置文件的数组键名决定
         // 最终生成的 Gate 标识：seat-audit-monitor.view / seat-audit-monitor.admin
         $this->registerPermissions(
@@ -67,14 +67,6 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
     public function getPackageRepositoryUrl(): string
     {
         return '';
-    }
-
-    /**
-     * 返回插件版本号
-     */
-    public function getPackageVersion(): string
-    {
-        return '1.0.0';
     }
 
     /**

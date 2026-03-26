@@ -1,13 +1,13 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Models\Whitelist.php
+// src/Models/Whitelist.php
 // 豁免白名单模型
 
 namespace Seat\SeatAuditMonitor\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Seat\Services\Models\ExtensibleModel;
 
-class Whitelist extends Model
+class Whitelist extends ExtensibleModel
 {
     protected $table = 'seat_audit_whitelist';
 

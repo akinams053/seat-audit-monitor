@@ -1,13 +1,13 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Models\AuditStatus.php
+// src/Models/AuditStatus.php
 // 增量扫描水位线模型
 
 namespace Seat\SeatAuditMonitor\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Seat\Services\Models\ExtensibleModel;
 
-class AuditStatus extends Model
+class AuditStatus extends ExtensibleModel
 {
     protected $table = 'seat_audit_status';
 

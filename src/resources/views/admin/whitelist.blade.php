@@ -1,4 +1,4 @@
-{{-- D:\VS Code\Project test\seat-audit-monitor\src\resources\views\admin\whitelist.blade.php --}}
+{{-- src/resources/views/admin/whitelist.blade.php --}}
 {{-- 白名单管理视图，支持角色名搜索自动补全 --}}
 
 @extends('web::layouts.grids.12')

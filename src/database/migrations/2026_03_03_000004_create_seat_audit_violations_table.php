@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\database\migrations\2026_03_03_000004_create_seat_audit_violations_table.php
+// src/database/migrations/2026_03_03_000004_create_seat_audit_violations_table.php
 // 违规记录表迁移文件（核心存储快照数据）
 
 use Illuminate\Database\Migrations\Migration;

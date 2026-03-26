@@ -1,12 +1,13 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Http\Controllers\ViolationController.php
+// src/Http/Controllers/ViolationController.php
 // 违规记录查看控制器，包含手动触发审计扫描功能及 CSV 导出功能
 
 namespace Seat\SeatAuditMonitor\Http\Controllers;
 
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Gate;
 use Seat\SeatAuditMonitor\Jobs\AuditWalletTransactionsJob;
 
@@ -64,7 +65,7 @@ class ViolationController extends Controller
         $beforeCount = DB::table('seat_audit_violations')->count();
 
         // 同步执行审计 Job（在当前请求进程中运行）
-        dispatch_now(new AuditWalletTransactionsJob());
+        Bus::dispatchSync(new AuditWalletTransactionsJob());
 
         // 计算本次扫描新增的违规记录数
         $afterCount = DB::table('seat_audit_violations')->count();

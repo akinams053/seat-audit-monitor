@@ -1,13 +1,13 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Models\Violation.php
+// src/Models/Violation.php
 // 违规记录模型
 
 namespace Seat\SeatAuditMonitor\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Seat\Services\Models\ExtensibleModel;
 
-class Violation extends Model
+class Violation extends ExtensibleModel
 {
     protected $table = 'seat_audit_violations';
 

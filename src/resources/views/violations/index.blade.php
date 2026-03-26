@@ -1,4 +1,4 @@
-{{-- D:\VS Code\Project test\seat-audit-monitor\src\resources\views\violations\index.blade.php --}}
+{{-- src/resources/views/violations/index.blade.php --}}
 {{-- 违规记录列表视图，继承 SeAT 原生布局，支持时间区间筛选和 CSV 导出 --}}
 
 @extends('web::layouts.grids.12')

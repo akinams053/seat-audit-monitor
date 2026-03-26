@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Config\Permissions\permissions.php
+// src/Config/Permissions/permissions.php
 // SeAT 4.x 权限定义文件，通过 registerPermissions() 注册到 Gate 系统
 // 数组键名（view / admin）即为权限 ability 标识符
 // 注册时的 scope 参数为 'seat-audit-monitor'

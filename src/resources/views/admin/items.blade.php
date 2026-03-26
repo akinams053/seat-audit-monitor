@@ -1,4 +1,4 @@
-{{-- D:\VS Code\Project test\seat-audit-monitor\src\resources\views\admin\items.blade.php --}}
+{{-- src/resources/views/admin/items.blade.php --}}
 {{-- 监控物品管理视图，输入 type_id 后自动查询物品名称 --}}
 
 @extends('web::layouts.grids.12')

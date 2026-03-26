@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Jobs\AuditWalletTransactionsJob.php
+// src/Jobs/AuditWalletTransactionsJob.php
 // 核心增量审计 Job，扫描角色钱包交易记录，检测违规卖出行为
 
 namespace Seat\SeatAuditMonitor\Jobs;

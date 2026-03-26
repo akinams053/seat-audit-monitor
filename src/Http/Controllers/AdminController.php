@@ -1,6 +1,6 @@
 <?php
 
-// D:\VS Code\Project test\seat-audit-monitor\src\Http\Controllers\AdminController.php
+// src/Http/Controllers/AdminController.php
 // 管理控制器，处理监控物品和白名单的增删查操作，以及前端自动补全 API
 
 namespace Seat\SeatAuditMonitor\Http\Controllers;
