@@ -27,6 +27,7 @@ class Violation extends ExtensibleModel
         'details',
         'audit_type',
         'contract_id',
+        'contract_availability',
     ];
 
     // details 字段自动序列化/反序列化为数组

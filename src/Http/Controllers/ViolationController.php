@@ -31,11 +31,11 @@ class ViolationController extends Controller
         $startDate = request('start_date');
         $endDate   = request('end_date');
         $auditType = request('audit_type', 'all');
-        // 角色名关键词：模糊匹配 character_name（发起方）或 counterparty_name（接收方）
-        // 留空表示不限；trim 后取最多 100 字符避免异常输入
-        $characterName = trim((string) request('character_name', ''));
-        if ($characterName !== '') {
-            $characterName = mb_substr($characterName, 0, 100);
+        // 通用关键词：模糊匹配 character_name / counterparty_name / 双方 corp name 或 ticker 任一命中
+        // URL 参数名改为 keyword（旧的 character_name 也兼容，平滑过渡）
+        $keyword = trim((string) (request('keyword', request('character_name', ''))));
+        if ($keyword !== '') {
+            $keyword = mb_substr($keyword, 0, 100);
         }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
@@ -43,11 +43,12 @@ class ViolationController extends Controller
             $auditType = 'all';
         }
 
-        // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单（仅合同行 ON 条件化）
+        // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单 + corporation_infos（用于 UI 显示双方军团）
         // 豁免语义（两套白名单不同）：
         //  - 角色白名单：任一方在角色白名单 → 豁免（OR，单方拦截，钱包+合同均生效）
         //  - 军团白名单：发起方军团 AND 接收方军团 都在军团白名单 → 豁免（AND，仅合同生效）
         // 显示条件 = NOT(任一豁免) = 钱包+发起方不在角色白名单 OR 合同+(双方都不在角色白名单 AND 至少一方军团不在白名单)
+        // corp_chr_info / corp_ctp_info：用于 UI 渲染双方军团 name/ticker（仅合同行有值，钱包行 affiliations JOIN 因 ON 条件不命中）
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -56,11 +57,13 @@ class ViolationController extends Controller
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
+            ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
             ->where(function ($q) {
                 // 钱包行：发起方不在角色白名单 → 显示
                 $q->where(function ($qw) {
@@ -70,16 +73,21 @@ class ViolationController extends Controller
                 // 合同行：双方都不在角色白名单 AND 至少一方军团不在白名单 → 显示
                 ->orWhere(function ($qc) {
                     $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
-                       ->whereNull('wl_chr.id')   // issuer 不在角色白名单
-                       ->whereNull('wl_ctp.id')   // acceptor 不在角色白名单
+                       ->whereNull('wl_chr.id')
+                       ->whereNull('wl_ctp.id')
                        ->where(function ($qcorp) {
-                           // 至少一方军团不在白名单（NOT(双方都在军团白名单)）
                            $qcorp->whereNull('corp_wl_chr.id')
                                  ->orWhereNull('corp_wl_ctp.id');
                        });
                 });
             })
-            ->select('seat_audit_violations.*')
+            ->select(
+                'seat_audit_violations.*',
+                'corp_chr_info.name as issuer_corp_name',
+                'corp_chr_info.ticker as issuer_corp_ticker',
+                'corp_ctp_info.name as acceptor_corp_name',
+                'corp_ctp_info.ticker as acceptor_corp_ticker'
+            )
             ->orderBy('seat_audit_violations.violation_time', 'desc');
 
         // 应用审计类型筛选
@@ -97,28 +105,32 @@ class ViolationController extends Controller
             $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
-        // 应用角色名模糊筛选：发起方或接收方任一命中即返回
-        // 用 where(Closure) 包成 (col LIKE OR col LIKE)，避免和外层 AND 优先级问题
-        if ($characterName !== '') {
-            $like = '%' . $characterName . '%';
+        // 应用通用关键词模糊筛选：角色名（双方）或 军团名/ticker（双方，仅合同行有值）任一命中即返回
+        // 用 where(Closure) 包成 OR 子句，避免和外层 AND 优先级冲突
+        if ($keyword !== '') {
+            $like = '%' . $keyword . '%';
             $query->where(function ($q) use ($like) {
                 $q->where('seat_audit_violations.character_name', 'LIKE', $like)
-                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like);
+                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like)
+                  ->orWhere('corp_chr_info.name', 'LIKE', $like)
+                  ->orWhere('corp_chr_info.ticker', 'LIKE', $like)
+                  ->orWhere('corp_ctp_info.name', 'LIKE', $like)
+                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like);
             });
         }
 
         // 分页展示，每页 50 条，保留筛选参数以便翻页时不丢失条件
         $paginationParams = array_filter([
-            'start_date'     => $startDate,
-            'end_date'       => $endDate,
-            'audit_type'     => $auditType !== 'all' ? $auditType : '',
-            'character_name' => $characterName,
+            'start_date' => $startDate,
+            'end_date'   => $endDate,
+            'audit_type' => $auditType !== 'all' ? $auditType : '',
+            'keyword'    => $keyword,
         ]);
         $violations = $query->paginate(50)->appends($paginationParams);
 
         return view(
             'seat-audit-monitor::violations.index',
-            compact('violations', 'startDate', 'endDate', 'auditType', 'characterName')
+            compact('violations', 'startDate', 'endDate', 'auditType', 'keyword')
         );
     }
 
@@ -203,10 +215,10 @@ class ViolationController extends Controller
         $startDate = request('start_date');
         $endDate   = request('end_date');
         $auditType = request('audit_type', 'all');
-        // 角色名关键词：与 index() 一致的模糊匹配语义
-        $characterName = trim((string) request('character_name', ''));
-        if ($characterName !== '') {
-            $characterName = mb_substr($characterName, 0, 100);
+        // 通用关键词：与 index() 一致的模糊匹配语义（兼容旧参数 character_name）
+        $keyword = trim((string) (request('keyword', request('character_name', ''))));
+        if ($keyword !== '') {
+            $keyword = mb_substr($keyword, 0, 100);
         }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
@@ -215,7 +227,7 @@ class ViolationController extends Controller
         }
 
         // 构建查询（不分页，导出全部匹配记录）
-        // 与 index() 保持一致的软过滤豁免语义（钱包：单方拦截；合同：双方都在白名单才豁免）
+        // 与 index() 保持一致的软过滤豁免语义 + 双方军团 JOIN
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -224,13 +236,14 @@ class ViolationController extends Controller
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
+            ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
             ->where(function ($q) {
-                // 与 index() 一致的豁免语义：角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免
                 $q->where(function ($qw) {
                     $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
                        ->whereNull('wl_chr.id');
@@ -249,6 +262,10 @@ class ViolationController extends Controller
             ->select([
                 'seat_audit_violations.character_name',
                 'seat_audit_violations.counterparty_name',
+                'corp_chr_info.name as issuer_corp_name',
+                'corp_chr_info.ticker as issuer_corp_ticker',
+                'corp_ctp_info.name as acceptor_corp_name',
+                'corp_ctp_info.ticker as acceptor_corp_ticker',
                 'seat_audit_violations.item_name',
                 'seat_audit_violations.amount',
                 'seat_audit_violations.violation_time',
@@ -256,6 +273,7 @@ class ViolationController extends Controller
                 'seat_audit_violations.character_id',
                 'seat_audit_violations.audit_type',
                 'seat_audit_violations.contract_id',
+                'seat_audit_violations.contract_availability',
             ]);
 
         // 应用审计类型筛选
@@ -273,12 +291,16 @@ class ViolationController extends Controller
             $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
-        // 角色名模糊筛选与 index() 同语义
-        if ($characterName !== '') {
-            $like = '%' . $characterName . '%';
+        // 通用关键词筛选与 index() 同语义
+        if ($keyword !== '') {
+            $like = '%' . $keyword . '%';
             $query->where(function ($q) use ($like) {
                 $q->where('seat_audit_violations.character_name', 'LIKE', $like)
-                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like);
+                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like)
+                  ->orWhere('corp_chr_info.name', 'LIKE', $like)
+                  ->orWhere('corp_chr_info.ticker', 'LIKE', $like)
+                  ->orWhere('corp_ctp_info.name', 'LIKE', $like)
+                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like);
             });
         }
 
@@ -306,22 +328,25 @@ class ViolationController extends Controller
             // 写入 UTF-8 BOM，确保 Excel 正确识别中文编码
             fwrite($handle, "\xEF\xBB\xBF");
 
-            // 写入 CSV 表头：原「角色名」列拆分为「发起方」+「接收方」，方便审计核对交易双方
+            // 写入 CSV 表头：拆双方角色名 + 双方军团 + 来源细分（availability）
             fputcsv($handle, [
                 '发起方',
+                '发起方军团',
                 '接收方',
+                '接收方军团',
                 '物品名称',
                 '交易金额 (ISK)',
                 '发生时间',
                 'Type ID',
                 'Character ID',
                 '审计类型',
+                '合同可见性',
                 'Contract ID',
             ]);
 
             // 逐行写入违规记录数据
             foreach ($records as $row) {
-                // 将内部审计类型转换为导出用中文显示
+                // 内部审计类型转中文显示
                 $auditTypeLabel = [
                     'wallet_transactions' => '钱包交易',
                     'contracts'           => '合同',
@@ -331,15 +356,40 @@ class ViolationController extends Controller
                 $counterpartyName = $row->counterparty_name
                     ?? ($row->audit_type === 'wallet_transactions' ? '市场' : '');
 
+                // 军团：合同行才有；钱包行接收方为「市场」
+                $issuerCorp = '';
+                $acceptorCorp = '';
+                if ($row->audit_type === 'contracts') {
+                    $issuerCorp = $row->issuer_corp_name
+                        ? $row->issuer_corp_name . (($row->issuer_corp_ticker) ? ' [' . $row->issuer_corp_ticker . ']' : '')
+                        : '';
+                    $acceptorCorp = $row->acceptor_corp_name
+                        ? $row->acceptor_corp_name . (($row->acceptor_corp_ticker) ? ' [' . $row->acceptor_corp_ticker . ']' : '')
+                        : '';
+                } elseif ($row->audit_type === 'wallet_transactions') {
+                    $acceptorCorp = '市场';
+                }
+
+                // availability 中文标签
+                $availabilityLabel = [
+                    'public'       => '公开',
+                    'personal'     => '私人',
+                    'corporation'  => '军团',
+                    'alliance'     => '联盟',
+                ][$row->contract_availability] ?? ($row->contract_availability ?? '');
+
                 fputcsv($handle, [
                     $row->character_name,
+                    $issuerCorp,
                     $counterpartyName,
+                    $acceptorCorp,
                     $row->item_name,
-                    number_format($row->amount, 2, '.', ''),  // 纯数字格式，便于 Excel 计算
+                    number_format($row->amount, 2, '.', ''),
                     $row->violation_time,
                     $row->type_id,
                     $row->character_id,
                     $auditTypeLabel,
+                    $availabilityLabel,
                     $row->audit_type === 'contracts' ? $row->contract_id : '',
                 ]);
             }

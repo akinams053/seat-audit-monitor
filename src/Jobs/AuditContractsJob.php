@@ -256,6 +256,9 @@ class AuditContractsJob implements ShouldQueue
                             ]),
                             'audit_type'     => self::AUDIT_TYPE,
                             'contract_id'    => $contract->contract_id,
+                            // availability 快照：public / personal / corporation / alliance
+                            // 用于 UI 来源列细分；details JSON 不再单独冗余存储
+                            'contract_availability' => $contract->availability,
                             'created_at'     => now()->toDateTimeString(),
                         ];
                     }

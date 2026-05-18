@@ -43,6 +43,7 @@
     - **审计类型字段**：`audit_type` VARCHAR(50) NOT NULL DEFAULT `'wallet_transactions'`，可能值 `wallet_transactions` / `contracts`。
     - **合同 ID 字段**：`contract_id` BIGINT UNSIGNED NULL（仅 `audit_type='contracts'` 时非空，便于按合同聚合追溯）。
     - **接收方快照字段**：`counterparty_id` BIGINT UNSIGNED NULL + `counterparty_name` VARCHAR NULL。合同：`counterparty_id=acceptor_id`、`counterparty_name=acceptor 名`；钱包：`counterparty_id=NULL`、`counterparty_name='市场'`。`counterparty_id` 加独立索引，用于和 `character_id` 一起 LEFT JOIN `seat_audit_whitelist` 做查询层软过滤。
+    - **合同可见性字段**：`contract_availability` VARCHAR(20) NULL。合同行写入 `contract_details.availability`（public/personal/corporation/alliance）；钱包行 NULL。UI「来源」列据此细分 badge。
 
 ## 4. 核心审计逻辑 (Audit Logic)
 
@@ -76,6 +77,7 @@
 5. **快照字段映射**：
     - `character_id` = `contract.issuer_id`（issuer = **发起方**主要相关方；assignee/acceptor 完整保存在 `details.parties`）
     - `counterparty_id` = `contract.acceptor_id`、`counterparty_name` = acceptor 角色名（finished 合同 acceptor 必为 character）
+    - `contract_availability` = `contract.availability`（public/personal/corporation/alliance；UI 来源 badge 据此细分）
     - `amount` = `max(price, reward)`（item_exchange 卖出取 price，求购取 reward；零金额合同保留 amount=0，UI 标灰区分）
     - `violation_time` = `contract.date_completed`
     - `contract_id` = `contract.contract_id`
@@ -127,10 +129,14 @@
 
 ## 6. 开发约束
 - **性能优先**：后台扫描器使用 `DB::table()` 直接查询。
-- **UI 规范**：违规记录列表需直观显示：角色名、物品名称、交易金额、发生时间。
+- **UI 规范**：违规记录列表需直观显示发起方/发起方军团/接收方/接收方军团/物品/金额/来源/Contract ID/时间。
+    - 双方军团通过 `character_affiliations` JOIN 实时拿（当前 affiliation 语义），UI 显示 ticker、hover 显示全名。
+    - 「来源」列按 `audit_type` + `contract_availability` 细分：钱包 / 合同·公开 / 合同·私人 / 合同·军团 / 合同·联盟。
+    - 通用关键词搜索框模糊匹配 character_name / counterparty_name / 双方 corp.name / 双方 corp.ticker 任一命中。
+    - 合同行的 Contract ID 是可点击按钮，触发 modal 显示完整合同/物品/三方角色快照（数据源自 `details` JSON）。
 - **权限**：
     - `seat-audit-monitor.view`：查看违规记录、导出 CSV。
-    - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描。
+    - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描、ESI 解析未知名字。
 
 ## 7. SSH 调试 (Production Debug)
 

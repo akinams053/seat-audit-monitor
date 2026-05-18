@@ -17,8 +17,10 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
     - **角色白名单**（个人豁免，OR 语义）：钱包/合同任一方在角色白名单 → 跳过
     - **军团白名单**（内部互转豁免，AND 语义）：仅合同审计生效；发起方军团 AND 接收方军团 都在军团白名单 → 跳过（典型用例：内部主公司加进军团白名单 → 内部成员之间合同豁免，与外部之间的合同仍审计）
     - **白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
-- **违规记录** — 自动记录发起方/接收方、物品名、金额、来源类型、合同 ID 等快照信息
-- **类型筛选** — 按审计类型（钱包/合同）+ 时间区间组合筛选；零金额合同 UI 灰底标识
+- **违规记录** — 自动记录发起方/接收方角色与军团、物品名、金额、来源类型、合同 ID 等快照信息
+- **类型筛选** — 按审计类型（钱包/合同）+ 时间区间 + 通用关键词（角色名/军团名/ticker 任一命中）组合筛选；零金额合同 UI 灰底标识
+- **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
+- **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
 - **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
 - **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口 `/universe/names/` 批量解析并回填，或 Artisan `seat:audit:resolve-unknown-names`
@@ -86,11 +88,12 @@ sudo -u www-data php artisan route:cache
 
 ## 升级
 
-> 适用场景：已经装了旧版本，现在要升级到当前版本（含军团白名单）。
+> 适用场景：已经装了旧版本，现在要升级到当前版本（含军团白名单 + 合同详情 modal + availability 细分）。
 > 本次升级**无破坏性变更**：
 > - 合同审计扩展：2 个 migration 加 `audit_type` / `contract_id` 字段
 > - 接收方扩展：2 个 migration 加 `counterparty_id` / `counterparty_name` 字段 + 回填历史数据
-> - 军团白名单：1 个 migration 新建 `seat_audit_corporation_whitelist` 表（空表，无回填）
+> - 军团白名单：1 个 migration 新建 `seat_audit_corporation_whitelist` 表
+> - 合同可见性：2 个 migration 加 `contract_availability` 字段 + 回填历史数据
 > 所有新增字段/表均可回滚。
 
 ```bash
@@ -162,7 +165,8 @@ sudo mariadb seat -e "DELETE FROM seat_audit_violations WHERE audit_type='contra
 #   - 仅合同审计版（4 个）：--step=4
 #   - 含接收方扩展版（6 个）：--step=6
 #   - 含军团白名单版（7 个）：--step=7
-sudo -u www-data php artisan migrate:rollback --step=7 \
+#   - 含 availability 细分版（9 个）：--step=9
+sudo -u www-data php artisan migrate:rollback --step=9 \
   --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 
 # 2. 切回旧版本（指定具体 commit 更稳）
@@ -227,11 +231,13 @@ sudo -u www-data php artisan config:clear
 路径：侧边栏 **审计监控 > 违规记录**（需 view 权限）
 
 - 按违规时间倒序展示，每页 50 条
-- 支持按**审计类型**（全部 / 钱包交易 / 合同）+ 开始日期 / 结束日期 + **角色名**组合筛选
-- **角色名筛选**：模糊匹配，发起方或接收方任一命中即返回（搜"市场"= 所有钱包行；搜"Unknown"= 所有外部未授权角色）
-- 表格 "来源" 列用 badge 区分：钱包（蓝）/ 合同（橙）；合同行多显示 Contract ID
+- 支持按**审计类型**（全部 / 钱包交易 / 合同）+ 开始日期 / 结束日期 + **通用关键词**（角色名 / 军团名 / ticker）组合筛选
+- **通用关键词**：模糊匹配 character_name / counterparty_name / 双方军团 name / 双方军团 ticker 任一命中（搜"市场"= 钱包行；搜"Unknown"= 外部未授权角色；搜军团 ticker = 该军团相关合同）
+- 表格列：**发起方 / 发起方军团 / 接收方 / 接收方军团 / 物品 / 金额 / 来源 / Contract ID / 时间**（双方军团显示 ticker，hover 显示全名）
+- **来源** badge 细分：钱包（灰）/ 合同·公开（绿）/ 合同·私人（橙）/ 合同·军团（蓝绿）/ 合同·联盟（深蓝）
+- 点击 **Contract ID** 弹出 modal 显示完整合同快照详情（合同信息 / 命中物品 / 三方角色）
 - **零金额合同**整行用灰底标识，便于一眼区分"成交套现"与"零价物资划转"
-- 点击 **导出 CSV (Excel)** 导出当前筛选结果（含审计类型 + Contract ID 两列）
+- 点击 **导出 CSV (Excel)** 导出当前筛选结果（含发起方/接收方军团 + availability 列）
 
 ### 5. 触发审计扫描
 
