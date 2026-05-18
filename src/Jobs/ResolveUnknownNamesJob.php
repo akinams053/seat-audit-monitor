@@ -85,14 +85,13 @@ class ResolveUnknownNamesJob implements ShouldQueue
             $charactersNeedingAffiliationResolve
         )));
 
-        if (empty($allCharactersToResolve) && empty($charactersNeedingNameResolve)) {
-            Log::info(self::LOG_PREFIX . ' 无需解析的 ID，提前退出。');
-            return;
-        }
+        // 不在这里 early return：即使前两类都为空，步骤 4.5 仍可能补全已存在 affiliation 行的 corp 名字。
+        // 各步骤内部对空数组都是 no-op，安全。
 
         Log::info(
             self::LOG_PREFIX . ' 名字待解析：' . count($charactersNeedingNameResolve)
             . '；affiliation 待解析：' . count($charactersNeedingAffiliationResolve)
+            . '；合同参与者总数：' . count($contractParticipantIds)
         );
 
         // ============ 步骤 3：批量解析角色名（POST /universe/names/） ============
