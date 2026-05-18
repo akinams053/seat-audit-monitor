@@ -74,7 +74,43 @@
     - `seat-audit-monitor.view`：查看违规记录、导出 CSV。
     - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描。
 
-## 7. 扩展规划 (Roadmap)
+## 7. SSH 调试 (Production Debug)
+
+本仓库内置 SSH 调试通道，便于在生产服务器上验证插件行为（迁移、扫描结果、日志）。
+
+### 7.1 工具
+
+- 入口：`scripts/ssh-seat 'remote shell command'`（bash wrapper，跨平台）
+- 实现：`scripts/ssh_seat.py`（paramiko 密码登录）
+- 凭据：项目根 `.creds`（4 行：HOST / PORT / USER / PASSWORD），格式见 `.creds.example`
+- `.creds` 已加入 `.gitignore`，不会进入版本控制
+
+### 7.2 协作约定
+
+- **目标环境是生产服务器**（`/var/www/seat`，Ubuntu 22.04 + PHP 8.4 + MariaDB + Redis）。详见 `../eve-seat-debug/server-environment.md`
+- **只读优先**：`SELECT` / `tail` / `ls` / `php artisan ... --pretend` 等只读命令可直接执行；任何写操作（`INSERT`/`UPDATE`/`DELETE`/`migrate`/`config:cache`/重启服务）**必须先与用户确认**
+- **客观推理，不猜测**：信息不足时直接说明还需要什么数据，不要凭印象给方案
+- **每次最多 3 步操作**，逐步推进，等用户反馈后再继续
+- **没有验证过的方案不直接上线**：先在 SSH 会话内 dry-run / `--pretend` / 单条 SQL 验证，再合入分支
+
+### 7.3 常用诊断片段
+
+```bash
+# 插件版本与水位线
+scripts/ssh-seat 'cd /var/www/seat && sudo -u www-data php artisan --version'
+scripts/ssh-seat 'sudo mysql seat -e "SELECT * FROM seat_audit_status;"'
+
+# 违规记录概况
+scripts/ssh-seat 'sudo mysql seat -e "SELECT COUNT(*) AS total, MAX(violation_time) AS latest FROM seat_audit_violations;"'
+
+# 手动触发扫描（写操作，先与用户确认）
+scripts/ssh-seat 'cd /var/www/seat && sudo -u www-data php artisan seat:audit:scan'
+
+# Horizon / 日志
+scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
+```
+
+## 8. 扩展规划 (Roadmap)
 当前仅审计市场交易，架构已为以下扩展预留设计：
 - **合同审计**：未来可新增 `AuditContractsJob`，扫描 `character_contracts` / `character_contract_items` 表。
 - **水位线复用**：`seat_audit_status.audit_type` 字段支持多审计类型（当前仅 `wallet_transactions`）。

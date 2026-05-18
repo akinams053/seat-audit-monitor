@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# SSH helper wrapper: 转发到 ssh_seat.py（跨平台密码登录，依赖 paramiko）。
+# .creds 格式见 .creds.example。
+# 用法: scripts/ssh-seat 'shell command to run remotely'
+set -euo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# 在 Windows 上 python3 常指向 Microsoft Store stub（未装时静默退 49）。
+# 用 --version 实际验证候选可用性，挑第一个能跑的。
+PY=""
+for cand in python3 python py; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" --version >/dev/null 2>&1; then
+        PY="$cand"
+        break
+    fi
+done
+if [[ -z "$PY" ]]; then
+    echo "ERROR: 找不到可用的 python3 / python / py" >&2
+    exit 1
+fi
+
+exec "$PY" "$SCRIPT_DIR/ssh_seat.py" "$@"
