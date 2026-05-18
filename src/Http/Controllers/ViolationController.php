@@ -9,6 +9,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Gate;
+use Seat\SeatAuditMonitor\Jobs\AuditContractsJob;
 use Seat\SeatAuditMonitor\Jobs\AuditWalletTransactionsJob;
 
 class ViolationController extends Controller
@@ -28,10 +29,21 @@ class ViolationController extends Controller
         // 获取时间区间筛选参数（来自 GET 请求）
         $startDate = request('start_date');
         $endDate   = request('end_date');
+        $auditType = request('audit_type', 'all');
+
+        // 审计类型筛选仅允许已知值，非法值按全部处理
+        if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
+            $auditType = 'all';
+        }
 
         // 构建基础查询，支持按时间区间过滤
         $query = DB::table('seat_audit_violations')
             ->orderBy('violation_time', 'desc');
+
+        // 应用审计类型筛选
+        if ($auditType !== 'all') {
+            $query->where('audit_type', $auditType);
+        }
 
         // 应用起始时间筛选（violation_time >= start_date 00:00:00）
         if ($startDate) {
@@ -44,9 +56,17 @@ class ViolationController extends Controller
         }
 
         // 分页展示，每页 50 条，保留筛选参数以便翻页时不丢失条件
-        $violations = $query->paginate(50)->appends(request()->only(['start_date', 'end_date']));
+        $paginationParams = array_filter([
+            'start_date' => $startDate,
+            'end_date'   => $endDate,
+            'audit_type' => $auditType !== 'all' ? $auditType : '',
+        ]);
+        $violations = $query->paginate(50)->appends($paginationParams);
 
-        return view('seat-audit-monitor::violations.index', compact('violations', 'startDate', 'endDate'));
+        return view(
+            'seat-audit-monitor::violations.index',
+            compact('violations', 'startDate', 'endDate', 'auditType')
+        );
     }
 
     /**
@@ -61,21 +81,36 @@ class ViolationController extends Controller
             abort(403, '您没有权限执行审计扫描。');
         }
 
+        // 获取手动审计类型，非法值直接返回错误提示
+        $type = request('type', 'all');
+        if (! in_array($type, ['wallet', 'contracts', 'all'], true)) {
+            return redirect()->back()
+                ->with('error', '无效的审计类型。');
+        }
+
         // 记录扫描前的违规记录数，用于对比扫描结果
         $beforeCount = DB::table('seat_audit_violations')->count();
 
-        // 同步执行审计 Job（在当前请求进程中运行）
-        Bus::dispatchSync(new AuditWalletTransactionsJob());
+        // 按选择同步执行审计 Job（在当前请求进程中运行）
+        if ($type === 'wallet' || $type === 'all') {
+            Bus::dispatchSync(new AuditWalletTransactionsJob());
+        }
+
+        if ($type === 'contracts' || $type === 'all') {
+            Bus::dispatchSync(new AuditContractsJob());
+        }
 
         // 计算本次扫描新增的违规记录数
         $afterCount = DB::table('seat_audit_violations')->count();
         $newCount = $afterCount - $beforeCount;
 
-        if ($newCount > 0) {
-            $message = '审计扫描完成，新发现 ' . $newCount . ' 条违规记录。';
-        } else {
-            $message = '审计扫描完成，未发现新的违规记录。';
-        }
+        // 把内部 type 标识转成中文标签，便于管理员阅读
+        $typeLabel = [
+            'wallet'    => '钱包交易',
+            'contracts' => '合同',
+            'all'       => '全部类型',
+        ][$type];
+        $message = '审计扫描完成（' . $typeLabel . '），新发现 ' . $newCount . ' 条违规记录。';
 
         return redirect()->route('seat-audit.violations.index')
             ->with('success', $message);
@@ -96,11 +131,31 @@ class ViolationController extends Controller
         // 获取时间区间筛选参数
         $startDate = request('start_date');
         $endDate   = request('end_date');
+        $auditType = request('audit_type', 'all');
+
+        // 审计类型筛选仅允许已知值，非法值按全部处理
+        if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
+            $auditType = 'all';
+        }
 
         // 构建查询（不分页，导出全部匹配记录）
         $query = DB::table('seat_audit_violations')
             ->orderBy('violation_time', 'desc')
-            ->select(['character_name', 'item_name', 'amount', 'violation_time', 'type_id', 'character_id']);
+            ->select([
+                'character_name',
+                'item_name',
+                'amount',
+                'violation_time',
+                'type_id',
+                'character_id',
+                'audit_type',
+                'contract_id',
+            ]);
+
+        // 应用审计类型筛选
+        if ($auditType !== 'all') {
+            $query->where('audit_type', $auditType);
+        }
 
         // 应用起始时间筛选
         if ($startDate) {
@@ -137,10 +192,25 @@ class ViolationController extends Controller
             fwrite($handle, "\xEF\xBB\xBF");
 
             // 写入 CSV 表头
-            fputcsv($handle, ['角色名', '物品名称', '交易金额 (ISK)', '发生时间', 'Type ID', 'Character ID']);
+            fputcsv($handle, [
+                '角色名',
+                '物品名称',
+                '交易金额 (ISK)',
+                '发生时间',
+                'Type ID',
+                'Character ID',
+                '审计类型',
+                'Contract ID',
+            ]);
 
             // 逐行写入违规记录数据
             foreach ($records as $row) {
+                // 将内部审计类型转换为导出用中文显示
+                $auditTypeLabel = [
+                    'wallet_transactions' => '钱包交易',
+                    'contracts'           => '合同',
+                ][$row->audit_type] ?? $row->audit_type;
+
                 fputcsv($handle, [
                     $row->character_name,
                     $row->item_name,
@@ -148,6 +218,8 @@ class ViolationController extends Controller
                     $row->violation_time,
                     $row->type_id,
                     $row->character_id,
+                    $auditTypeLabel,
+                    $row->audit_type === 'contracts' ? $row->contract_id : '',
                 ]);
             }
 
