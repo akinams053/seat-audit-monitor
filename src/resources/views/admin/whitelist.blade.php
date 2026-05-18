@@ -1,5 +1,6 @@
 {{-- src/resources/views/admin/whitelist.blade.php --}}
-{{-- 白名单管理视图，支持角色名搜索自动补全 --}}
+{{-- 白名单管理视图：两个 tab — 角色白名单（所有审计生效）+ 军团白名单（仅合同审计生效） --}}
+{{-- $activeTab：'character' | 'corporation'，决定页面打开时默认激活的 tab --}}
 
 @extends('web::layouts.grids.12')
 
@@ -14,80 +15,191 @@
         <div class="alert alert-success">{{ session('success') }}</div>
         @endif
 
-        {{-- 添加白名单表单 --}}
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">添加豁免角色</h3>
-            </div>
-            <div class="card-body">
-                <form method="POST" action="{{ route('seat-audit.admin.whitelist.store') }}" id="whitelist-form">
-                    @csrf
-                    {{-- character_id 隐藏字段，由选择角色后自动填入 --}}
-                    <input type="hidden" name="character_id" id="character-id-input">
-                    <div class="form-row">
-                        <div class="form-group col-md-8" style="position: relative;">
-                            <label>搜索角色（输入角色名称）</label>
-                            <input type="text" id="character-search"
-                                   class="form-control @error('character_id') is-invalid @enderror"
-                                   placeholder="输入至少 2 个字符搜索角色..." autocomplete="off">
-                            @error('character_id')
-                            <div class="invalid-feedback">{{ $message }}</div>
-                            @enderror
-                            {{-- 搜索结果下拉列表 --}}
-                            <div id="search-results" class="list-group"
-                                 style="position: absolute; z-index: 1000; width: calc(100% - 30px); display: none; max-height: 300px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
-                            </div>
-                        </div>
-                        {{-- 选中角色后显示已选信息 --}}
-                        <div class="form-group col-md-2 d-flex align-items-end">
-                            <input type="text" name="character_name" id="character-name-display"
-                                   class="form-control" placeholder="未选择" readonly>
-                        </div>
-                        <div class="form-group col-md-2 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary w-100" id="submit-btn" disabled>添加</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
+        {{-- 顶部 tab 导航 --}}
+        <ul class="nav nav-tabs" id="whitelistTab" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link {{ ($activeTab ?? 'character') === 'character' ? 'active' : '' }}"
+                   id="tab-character" data-toggle="tab" href="#pane-character" role="tab">
+                    <i class="fas fa-user"></i> 角色白名单
+                    <span class="badge badge-secondary ml-1">{{ count($whitelist) }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ ($activeTab ?? 'character') === 'corporation' ? 'active' : '' }}"
+                   id="tab-corporation" data-toggle="tab" href="#pane-corporation" role="tab">
+                    <i class="fas fa-building"></i> 军团白名单
+                    <span class="badge badge-secondary ml-1">{{ count($corporationWhitelist) }}</span>
+                    <small class="text-muted ml-1">(仅合同生效)</small>
+                </a>
+            </li>
+        </ul>
 
-        {{-- 白名单角色列表 --}}
-        <div class="card mt-3">
-            <div class="card-header">
-                <h3 class="card-title">当前白名单 ({{ count($whitelist) }} 人)</h3>
+        <div class="tab-content border-left border-right border-bottom p-3" style="background:#fff;">
+
+            {{-- ============= Tab 1：角色白名单 ============= --}}
+            <div class="tab-pane fade {{ ($activeTab ?? 'character') === 'character' ? 'show active' : '' }}"
+                 id="pane-character" role="tabpanel">
+
+                {{-- 添加角色白名单表单 --}}
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">添加豁免角色</h3>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ route('seat-audit.admin.whitelist.store') }}" id="whitelist-form">
+                            @csrf
+                            <input type="hidden" name="character_id" id="character-id-input">
+                            <div class="form-row">
+                                <div class="form-group col-md-8" style="position: relative;">
+                                    <label>搜索角色（输入角色名称）</label>
+                                    <input type="text" id="character-search"
+                                           class="form-control @error('character_id') is-invalid @enderror"
+                                           placeholder="输入至少 2 个字符搜索角色..." autocomplete="off">
+                                    @error('character_id')
+                                    <div class="invalid-feedback">{{ $message }}</div>
+                                    @enderror
+                                    <div id="search-results" class="list-group"
+                                         style="position: absolute; z-index: 1000; width: calc(100% - 30px); display: none; max-height: 300px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                                    </div>
+                                </div>
+                                <div class="form-group col-md-2 d-flex align-items-end">
+                                    <input type="text" name="character_name" id="character-name-display"
+                                           class="form-control" placeholder="未选择" readonly>
+                                </div>
+                                <div class="form-group col-md-2 d-flex align-items-end">
+                                    <button type="submit" class="btn btn-primary w-100" id="submit-btn" disabled>添加</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                {{-- 角色白名单列表 --}}
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3 class="card-title">当前角色白名单 ({{ count($whitelist) }} 人)</h3>
+                    </div>
+                    <div class="card-body p-0">
+                        @if($whitelist->isEmpty())
+                            <div class="p-3 text-muted">暂无豁免角色。</div>
+                        @else
+                        <table class="table table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th>角色 ID</th>
+                                    <th>角色名称</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($whitelist as $entry)
+                                <tr>
+                                    <td>{{ $entry->character_id }}</td>
+                                    <td>{{ $entry->character_name }}</td>
+                                    <td>
+                                        <form method="POST"
+                                              action="{{ route('seat-audit.admin.whitelist.destroy', $entry->id) }}"
+                                              onsubmit="return confirm('确认将此角色从白名单移除？')">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit" class="btn btn-sm btn-danger">移除</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                        @endif
+                    </div>
+                </div>
             </div>
-            <div class="card-body p-0">
-                @if($whitelist->isEmpty())
-                    <div class="p-3 text-muted">暂无豁免角色。</div>
-                @else
-                <table class="table table-striped mb-0">
-                    <thead>
-                        <tr>
-                            <th>角色 ID</th>
-                            <th>角色名称</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach($whitelist as $entry)
-                        <tr>
-                            <td>{{ $entry->character_id }}</td>
-                            <td>{{ $entry->character_name }}</td>
-                            <td>
-                                <form method="POST"
-                                      action="{{ route('seat-audit.admin.whitelist.destroy', $entry->id) }}"
-                                      onsubmit="return confirm('确认将此角色从白名单移除？')">
-                                    @csrf
-                                    @method('DELETE')
-                                    <button type="submit" class="btn btn-sm btn-danger">移除</button>
-                                </form>
-                            </td>
-                        </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-                @endif
+
+            {{-- ============= Tab 2：军团白名单 ============= --}}
+            <div class="tab-pane fade {{ ($activeTab ?? 'character') === 'corporation' ? 'show active' : '' }}"
+                 id="pane-corporation" role="tabpanel">
+
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>军团白名单仅对合同审计生效</strong>：合同发起方军团或接收方当前军团命中即跳过整份合同；钱包交易审计不受此名单影响。
+                </div>
+
+                {{-- 添加军团白名单表单 --}}
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">添加豁免军团</h3>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ route('seat-audit.admin.corporation-whitelist.store') }}" id="corp-whitelist-form">
+                            @csrf
+                            <input type="hidden" name="corporation_id" id="corp-id-input">
+                            <div class="form-row">
+                                <div class="form-group col-md-8" style="position: relative;">
+                                    <label>搜索军团（输入军团名或 ticker）</label>
+                                    <input type="text" id="corp-search"
+                                           class="form-control @error('corporation_id') is-invalid @enderror"
+                                           placeholder="输入至少 2 个字符搜索军团..." autocomplete="off">
+                                    @error('corporation_id')
+                                    <div class="invalid-feedback">{{ $message }}</div>
+                                    @enderror
+                                    <div id="corp-search-results" class="list-group"
+                                         style="position: absolute; z-index: 1000; width: calc(100% - 30px); display: none; max-height: 300px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                                    </div>
+                                </div>
+                                <div class="form-group col-md-2 d-flex align-items-end">
+                                    <input type="text" id="corp-name-display"
+                                           class="form-control" placeholder="未选择" readonly>
+                                </div>
+                                <div class="form-group col-md-2 d-flex align-items-end">
+                                    <button type="submit" class="btn btn-primary w-100" id="corp-submit-btn" disabled>添加</button>
+                                </div>
+                            </div>
+                            <small class="text-muted">
+                                只能选择 SeAT 已收录的军团（即任一成员授权 ESI 后会自动入库）。未收录的军团请先让该军团内任一角色登录 SeAT。
+                            </small>
+                        </form>
+                    </div>
+                </div>
+
+                {{-- 军团白名单列表 --}}
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3 class="card-title">当前军团白名单 ({{ count($corporationWhitelist) }} 个)</h3>
+                    </div>
+                    <div class="card-body p-0">
+                        @if($corporationWhitelist->isEmpty())
+                            <div class="p-3 text-muted">暂无豁免军团。</div>
+                        @else
+                        <table class="table table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th>军团 ID</th>
+                                    <th>军团名称</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($corporationWhitelist as $entry)
+                                <tr>
+                                    <td>{{ $entry->corporation_id }}</td>
+                                    <td>{{ $entry->corporation_name }}</td>
+                                    <td>
+                                        <form method="POST"
+                                              action="{{ route('seat-audit.admin.corporation-whitelist.destroy', $entry->id) }}"
+                                              onsubmit="return confirm('确认将此军团从白名单移除？')">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit" class="btn btn-sm btn-danger">移除</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                        @endif
+                    </div>
+                </div>
             </div>
+
         </div>
 
         <div class="mt-2">
@@ -98,10 +210,11 @@
     </div>
 </div>
 
-{{-- 角色搜索自动补全脚本，通过 @push 注入到 SeAT 布局的 javascript 栈中 --}}
+{{-- 自动补全脚本：两套独立的 search box（角色 + 军团） --}}
 @push('javascript')
 <script>
 $(function() {
+    // ============== 角色搜索（保留原逻辑） ==============
     var searchInput = $('#character-search');
     var resultsBox = $('#search-results');
     var idInput = $('#character-id-input');
@@ -109,12 +222,10 @@ $(function() {
     var submitBtn = $('#submit-btn');
     var debounceTimer = null;
 
-    // 输入时防抖搜索（300ms）
     searchInput.on('input', function() {
         var keyword = $(this).val().trim();
         clearTimeout(debounceTimer);
 
-        // 清除之前的选择状态
         idInput.val('');
         nameDisplay.val('');
         submitBtn.prop('disabled', true);
@@ -149,7 +260,6 @@ $(function() {
         }, 300);
     });
 
-    // 选中某个角色
     resultsBox.on('click', '.character-option', function(e) {
         e.preventDefault();
         var charId = $(this).data('id');
@@ -162,10 +272,74 @@ $(function() {
         resultsBox.hide().empty();
     });
 
-    // 点击页面其他区域时关闭下拉
+    // ============== 军团搜索 ==============
+    var corpInput = $('#corp-search');
+    var corpResultsBox = $('#corp-search-results');
+    var corpIdInput = $('#corp-id-input');
+    var corpNameDisplay = $('#corp-name-display');
+    var corpSubmitBtn = $('#corp-submit-btn');
+    var corpDebounceTimer = null;
+
+    corpInput.on('input', function() {
+        var keyword = $(this).val().trim();
+        clearTimeout(corpDebounceTimer);
+
+        corpIdInput.val('');
+        corpNameDisplay.val('');
+        corpSubmitBtn.prop('disabled', true);
+
+        if (keyword.length < 2) {
+            corpResultsBox.hide().empty();
+            return;
+        }
+
+        corpDebounceTimer = setTimeout(function() {
+            $.getJSON('{{ route("seat-audit.api.corporations") }}', { q: keyword }, function(data) {
+                corpResultsBox.empty();
+
+                if (data.length === 0) {
+                    corpResultsBox.append(
+                        '<div class="list-group-item text-muted">未找到匹配的军团（SeAT 仅收录已被授权过的军团）</div>'
+                    );
+                } else {
+                    $.each(data, function(i, corp) {
+                        var safeName = $('<span>').text(corp.name).html();
+                        var safeTicker = $('<span>').text(corp.ticker || '').html();
+                        corpResultsBox.append(
+                            '<a href="#" class="list-group-item list-group-item-action corp-option" ' +
+                            'data-id="' + corp.corporation_id + '" data-name="' + safeName + '">' +
+                            '<strong>' + safeName + '</strong>' +
+                            (safeTicker ? ' <span class="badge badge-secondary">' + safeTicker + '</span>' : '') +
+                            '<small class="text-muted ml-2">ID: ' + corp.corporation_id + '</small>' +
+                            '</a>'
+                        );
+                    });
+                }
+
+                corpResultsBox.show();
+            });
+        }, 300);
+    });
+
+    corpResultsBox.on('click', '.corp-option', function(e) {
+        e.preventDefault();
+        var corpId = $(this).data('id');
+        var corpName = $(this).data('name');
+
+        corpIdInput.val(corpId);
+        corpNameDisplay.val(corpName);
+        corpInput.val(corpName);
+        corpSubmitBtn.prop('disabled', false);
+        corpResultsBox.hide().empty();
+    });
+
+    // ============== 点击页面其他区域关闭两个下拉 ==============
     $(document).on('click', function(e) {
         if (!$(e.target).closest('#character-search, #search-results').length) {
             resultsBox.hide();
+        }
+        if (!$(e.target).closest('#corp-search, #corp-search-results').length) {
+            corpResultsBox.hide();
         }
     });
 });

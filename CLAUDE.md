@@ -33,7 +33,8 @@
 ## 3. 数据库结构 (Schema)
 表前缀：`seat_audit_`
 - `seat_audit_monitor_items`：监控物品列表 (id, type_id, item_name)。
-- `seat_audit_whitelist`：豁免名单 (id, character_id, character_name)。
+- `seat_audit_whitelist`：**角色**豁免名单 (id, character_id, character_name)。钱包+合同审计均生效。
+- `seat_audit_corporation_whitelist`：**军团**豁免名单 (id, corporation_id, corporation_name)。**仅合同审计生效**（钱包审计的对方是市场撮合系统，无军团概念）。
 - `seat_audit_status`：记录增量水位线 (id, audit_type, last_id, **last_completed_at**)。
     - `last_id`：钱包交易审计用（按记录 id 推进）。
     - `last_completed_at`：合同审计用（按 `date_completed` 推进，DATETIME NULL）。
@@ -64,7 +65,8 @@
 
 过滤流程：
 1. **状态/类型筛选**：仅审 `status='finished'` 且 `type IN ('item_exchange','auction')`（跳过 courier/loan/unknown，避免物权未转移的误报）。
-2. **白名单三方拦截**：`issuer_id` / `assignee_id` / `acceptor_id` 任一在 `seat_audit_whitelist.character_id` 中即跳过整份合同。
+2. **角色白名单三方拦截**：`issuer_id` / `assignee_id` / `acceptor_id` 任一在 `seat_audit_whitelist.character_id` 中即跳过整份合同。
+2.5. **军团白名单拦截**：发起方军团（`contract.issuer_corporation_id`）或 接收方当前所属军团（`character_affiliations.corporation_id` JOIN by `acceptor_id`）任一在 `seat_audit_corporation_whitelist.corporation_id` 中即跳过整份合同。Job 内按 chunk 预加载本批 acceptor 的 affiliation，避免 N+1。
 3. **物品匹配**：合同 items 中任一 `type_id` 命中监控名单即记违规。
 4. **违规粒度**：一个 `(contract_id, type_id)` 一条 violation。若同一合同含多种监控物品，落多条；同 type_id 多 record（如 is_singleton 装配舰船）则聚合 quantity 到 `details.item.quantity`。
 5. **快照字段映射**：
@@ -84,8 +86,9 @@
 
 ### 4.4 白名单查询层软过滤
 - **生效位置**：仅在 `ViolationController::index` / `::export` 查询时（即 UI 列表和 CSV 导出），不影响 Job 的扫描入库逻辑。
-- **JOIN 语义**：违规表 LEFT JOIN `seat_audit_whitelist` 两次——`character_id`（发起方）和 `counterparty_id`（接收方）任一命中即从结果集中排除。
-- **设计取舍**：白名单更新即时生效、可逆、DB 数据不动。代价是查询多两次 JOIN（`counterparty_id` 已加独立索引）。
+- **角色白名单 JOIN**：违规表 LEFT JOIN `seat_audit_whitelist` 两次——`character_id`（发起方）和 `counterparty_id`（接收方）任一命中即从结果集中排除。钱包+合同行均参与。
+- **军团白名单 JOIN（仅合同行）**：违规表 LEFT JOIN `character_affiliations` + `seat_audit_corporation_whitelist` 各两次（发起方/接收方各一组）。`character_affiliations` 的 ON 子句包含 `AND seat_audit_violations.audit_type = 'contracts'`，使钱包行的 JOIN 不命中，保证军团白名单不误过滤钱包审计结果。
+- **设计取舍**：白名单更新即时生效、可逆、DB 数据不动。军团使用「当前 affiliation」语义（角色当前所属军团），不是合同发生时的历史 affiliation——若某成员合同发生时不在白名单军团，之后加入了白名单军团，那条历史 violation 也会被软过滤排除掉。
 - **已知盲区**：`assignee_id` 不单独成列，仅在 `details` JSON 内。Job 扫描时已对 issuer/assignee/acceptor 三方拦截，但若白名单**事后**新增的角色仅作为 assignee 出现（不是 issuer/acceptor），软过滤不会命中该历史记录。属边角案例。
 
 ## 5. 插件开发规范 (SeAT 5.x Plugin)
@@ -155,8 +158,10 @@ scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
 ```
 
 ## 8. 扩展规划 (Roadmap)
-当前已支持市场交易审计 (wallet_transactions) 与合同审计 (contracts)。后续可考虑：
-- **公司/联盟白名单**：当前 `seat_audit_whitelist` 仅按 `character_id` 匹配；合同的 `assignee_id` 可能是 corp 或 alliance ID，公司间合同会绕过白名单。可扩展为多类型 ID 白名单。
+当前已支持市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 + 军团白名单。后续可考虑：
+- **联盟白名单**：当前已支持角色 + 军团两级白名单。合同的 `assignee_id` 可能是 alliance ID，跨联盟合同仍可能绕过。可扩展为三级白名单或统一 entity_type 模型。
+- **assignee 字段成列**：当前 `assignee_id` 仅在 `details` JSON 内，软过滤无法覆盖"白名单事后新增 assignee-only 角色"的边角场景。可考虑在 violations 表加 `assignee_id` 快照列。
+- **外部 character_id 名字解析**：未授权过 SeAT 的外部角色（如 DeneX 案例 ID=2120882761）在 violations 显示 "Unknown (ID: ...)"。可在 UI 加按钮通过 ESI `/universe/names` 实时解析，或后台 job 批量回填。注意：当前 SeAT 实例**没有** `character_names` 表，需调研 5.x 版本下解析结果实际存放位置。
 - **钱包日志 (Donation) 审计**：直接 ISK 转账（`ref_type='player_donation'`）目前不审，可作为新审计类型加入；技术上需要新的 `AuditDonationsJob` + `audit_type='donations'` 水位线。
 - **合同金额按 LP 价值核算**：当前 `amount = max(price, reward)`，零金额合同 amount=0。可引入 LP 价格表或 evepraisal 估值，把零金额合同的物品市场价合算进 amount。
 - **监控名单复用**：`seat_audit_monitor_items` 已跨审计类型共用，无需扩展。

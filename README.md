@@ -13,7 +13,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **双审计源** — 同时审计角色钱包市场交易（卖出受监控物品）与合同（包含受监控物品且双方均不在白名单）
 - **增量审计** — 基于水位线机制（钱包按 id，合同按 date_completed），每次仅处理新增数据
 - **物品监控** — 自定义监控物品名单，输入 type_id 自动查询物品名称
-- **白名单豁免** — 指定角色跳过所有审计；合同审计对 issuer/assignee/acceptor 三方任一命中即跳过；**白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
+- **白名单豁免** — 两级白名单：**角色白名单**（钱包+合同均生效，合同审计对 issuer/assignee/acceptor 三方任一命中即跳过）+ **军团白名单**（仅合同审计生效，对发起方军团/接收方当前军团任一命中即跳过）。**白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
 - **违规记录** — 自动记录发起方/接收方、物品名、金额、来源类型、合同 ID 等快照信息
 - **类型筛选** — 按审计类型（钱包/合同）+ 时间区间组合筛选；零金额合同 UI 灰底标识
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
@@ -82,11 +82,12 @@ sudo -u www-data php artisan route:cache
 
 ## 升级
 
-> 适用场景：已经装了旧版本（仅市场交易审计或不含「接收方」列的合同审计版本），现在要升级到当前版本。
+> 适用场景：已经装了旧版本，现在要升级到当前版本（含军团白名单）。
 > 本次升级**无破坏性变更**：
 > - 合同审计扩展：2 个 migration 加 `audit_type` / `contract_id` 字段
 > - 接收方扩展：2 个 migration 加 `counterparty_id` / `counterparty_name` 字段 + 回填历史数据
-> 所有新增字段均可回滚。
+> - 军团白名单：1 个 migration 新建 `seat_audit_corporation_whitelist` 表（空表，无回填）
+> 所有新增字段/表均可回滚。
 
 ```bash
 cd /var/www/seat
@@ -113,13 +114,14 @@ sudo -u www-data php artisan view:clear
 
 1. 侧边栏点击 **违规记录**，确认筛选区出现 **审计类型** 下拉
 2. 表格出现 **发起方** / **接收方** / **来源** / **Contract ID** 列；钱包行接收方显示「市场」badge，合同行接收方显示 acceptor 角色名
-3. 卡片标题旁有 **白名单实时过滤** 提示图标——白名单更新后违规列表自动按当前白名单排除（发起方或接收方任一命中即隐藏）
-4. **首次合同回扫推荐用命令行**（避免 Web 同步按钮被 nginx/php-fpm 60s 超时切断）：
+3. 卡片标题旁有 **白名单实时过滤** 提示图标——角色白名单更新后违规列表自动按当前白名单排除（发起方或接收方任一命中即隐藏）；军团白名单仅作用于合同行（按角色当前所属军团判断）
+4. 侧边栏「白名单」页面现在分两个 tab：**角色白名单**（钱包+合同均生效）+ **军团白名单**（仅合同生效），后者只能选 SeAT 已收录的军团
+5. **首次合同回扫推荐用命令行**（避免 Web 同步按钮被 nginx/php-fpm 60s 超时切断）：
    ```bash
    sudo -u www-data php artisan seat:audit:scan --type=contracts
    ```
    插件 migration 已预置基线 `2026-01-01`，**2026 年以前的合同完全跳过**。首次回扫的实际范围取决于 2026 年起的 finished 合同体量，索引就绪后通常 10–30 秒内完成。
-5. 检查水位线已推进：
+6. 检查水位线已推进：
    ```bash
    sudo mariadb seat -e "SELECT audit_type, last_id, last_completed_at FROM seat_audit_status;"
    ```
@@ -155,7 +157,8 @@ sudo mariadb seat -e "DELETE FROM seat_audit_violations WHERE audit_type='contra
 # --step 数量按本次实际跑了几个 migration 来定：
 #   - 仅合同审计版（4 个）：--step=4
 #   - 含接收方扩展版（6 个）：--step=6
-sudo -u www-data php artisan migrate:rollback --step=6 \
+#   - 含军团白名单版（7 个）：--step=7
+sudo -u www-data php artisan migrate:rollback --step=7 \
   --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 
 # 2. 切回旧版本（指定具体 commit 更稳）
@@ -197,9 +200,18 @@ sudo -u www-data php artisan config:clear
 
 路径：侧边栏 **审计监控 > 白名单**（需 admin 权限）
 
+页面分两个 tab：
+
+**角色白名单**（钱包+合同均生效）
 - 输入角色名搜索，选择后自动填入 character_id
 - 白名单角色的所有交易将被完全跳过
-- 移除白名单后，该角色在下次扫描起重新纳入审计
+
+**军团白名单**（仅合同生效）
+- 输入军团名或 ticker 搜索（数据源是 SeAT 已收录的 corporation_infos）
+- 合同发起方军团 或 接收方当前军团 命中即整份合同跳过
+- 钱包审计不受军团白名单影响（钱包对手方是市场，无军团）
+
+移除白名单后：变更对**历史违规列表**实时生效（软过滤），同时下次扫描起该角色/军团重新纳入审计。
 
 ### 4. 查看违规记录
 
@@ -252,9 +264,9 @@ protected function schedule(Schedule $schedule)
 - **接收方语义**：钱包审计 `counterparty_name='市场'`（对手方是市场撮合系统）；合同审计 `counterparty_name=acceptor 角色名`
 - **批量处理**：每次以 500 条为一批处理，白名单 / 监控名单 / 角色名映射预加载至内存，避免 N+1 查询
 - **审计优先级**：
-    - 钱包：白名单拦截 > 仅卖出（is_buy=0）> 物品匹配
-    - 合同：仅 finished + item_exchange/auction > 白名单三方拦截（issuer/assignee/acceptor 任一命中即跳过）> 物品匹配
-- **白名单实时过滤**：违规列表/导出查询时会 LEFT JOIN 白名单，发起方或接收方任一命中当前白名单则不展示（DB 历史数据不变；白名单加/减都即时生效、可逆）
+    - 钱包：角色白名单拦截 > 仅卖出（is_buy=0）> 物品匹配（军团白名单不参与）
+    - 合同：仅 finished + item_exchange/auction > 角色白名单三方拦截（issuer/assignee/acceptor 任一命中即跳过）> 军团白名单（issuer corp 或 acceptor 当前 corp 任一命中即跳过）> 物品匹配
+- **白名单实时过滤**：违规列表/导出查询时会 LEFT JOIN 角色白名单（双方）+ 军团白名单（仅合同行）；任一命中当前白名单则不展示（DB 历史数据不变；白名单加/减都即时生效、可逆）
 - **数据安全**：删除监控物品或移除白名单角色，均不会影响已有的违规记录
 
 ## 卸载

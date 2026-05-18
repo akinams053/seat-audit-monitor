@@ -68,7 +68,7 @@ class AdminController extends Controller
     }
 
     /**
-     * 显示白名单管理页面
+     * 显示白名单管理页面（角色 + 军团两个 tab 共用一个视图）
      */
     public function whitelist()
     {
@@ -76,7 +76,20 @@ class AdminController extends Controller
             ->orderBy('character_name')
             ->get();
 
-        return view('seat-audit-monitor::admin.whitelist', compact('whitelist'));
+        // 军团白名单同步加载，供视图的「军团」tab 渲染
+        $corporationWhitelist = DB::table('seat_audit_corporation_whitelist')
+            ->orderBy('corporation_name')
+            ->get();
+
+        // 通过查询参数控制默认激活的 tab（character / corporation），UI 刷新后保留上下文
+        $activeTab = in_array(request('tab'), ['character', 'corporation'], true)
+            ? request('tab')
+            : 'character';
+
+        return view(
+            'seat-audit-monitor::admin.whitelist',
+            compact('whitelist', 'corporationWhitelist', 'activeTab')
+        );
     }
 
     /**
@@ -96,7 +109,7 @@ class AdminController extends Controller
             'updated_at'     => now(),
         ]);
 
-        return redirect()->route('seat-audit.admin.whitelist')
+        return redirect()->route('seat-audit.admin.whitelist', ['tab' => 'character'])
             ->with('success', '角色已加入白名单。');
     }
 
@@ -107,8 +120,51 @@ class AdminController extends Controller
     {
         DB::table('seat_audit_whitelist')->where('id', $id)->delete();
 
-        return redirect()->route('seat-audit.admin.whitelist')
+        return redirect()->route('seat-audit.admin.whitelist', ['tab' => 'character'])
             ->with('success', '角色已从白名单移除。');
+    }
+
+    /**
+     * 添加军团白名单
+     * corporation_name 由服务端从 corporation_infos 自动填充，避免前端伪造
+     */
+    public function storeCorporationWhitelist(Request $request)
+    {
+        $request->validate([
+            'corporation_id' => 'required|integer|min:1|unique:seat_audit_corporation_whitelist,corporation_id',
+        ]);
+
+        // 从 SeAT 已收录的 corporation_infos 查官方军团名
+        $corp = DB::table('corporation_infos')
+            ->where('corporation_id', $request->corporation_id)
+            ->first();
+
+        if (!$corp) {
+            return redirect()->route('seat-audit.admin.whitelist', ['tab' => 'corporation'])
+                ->withErrors(['corporation_id' => '未在 SeAT 找到该军团信息，请确认 corporation_id 或先让 SeAT 拉取相关角色数据。'])
+                ->withInput();
+        }
+
+        DB::table('seat_audit_corporation_whitelist')->insert([
+            'corporation_id'   => $request->corporation_id,
+            'corporation_name' => $corp->name,
+            'created_at'       => now(),
+            'updated_at'       => now(),
+        ]);
+
+        return redirect()->route('seat-audit.admin.whitelist', ['tab' => 'corporation'])
+            ->with('success', '军团已加入白名单：' . $corp->name);
+    }
+
+    /**
+     * 删除军团白名单
+     */
+    public function destroyCorporationWhitelist(int $id)
+    {
+        DB::table('seat_audit_corporation_whitelist')->where('id', $id)->delete();
+
+        return redirect()->route('seat-audit.admin.whitelist', ['tab' => 'corporation'])
+            ->with('success', '军团已从白名单移除。');
     }
 
     // ========== AJAX API 方法 ==========
@@ -133,6 +189,33 @@ class AdminController extends Controller
             ->orderBy('name')
             ->limit(10)
             ->get(['character_id', 'name']);
+
+        return response()->json($results);
+    }
+
+    /**
+     * 按军团名/ticker 模糊搜索，返回 JSON 结果列表
+     * 数据来源：SeAT 收录的 corporation_infos 表
+     * 请求参数：q=搜索关键词（至少 2 个字符）
+     * 返回格式：[{corporation_id: 98123456, name: "Some Corp", ticker: "ABC"}, ...]
+     */
+    public function searchCorporations(Request $request)
+    {
+        $keyword = $request->input('q', '');
+
+        // 关键词过短直接返回空数组，避免对 corporation_infos 全表 LIKE 扫描
+        if (mb_strlen($keyword) < 2) {
+            return response()->json([]);
+        }
+
+        $results = DB::table('corporation_infos')
+            ->where(function ($q) use ($keyword) {
+                $q->where('name', 'LIKE', '%' . $keyword . '%')
+                  ->orWhere('ticker', 'LIKE', '%' . $keyword . '%');
+            })
+            ->orderBy('name')
+            ->limit(10)
+            ->get(['corporation_id', 'name', 'ticker']);
 
         return response()->json($results);
     }

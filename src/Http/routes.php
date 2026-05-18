@@ -37,18 +37,26 @@ Route::group([
         Route::delete('/admin/items/{id}', 'AdminController@destroyItem')
             ->name('seat-audit.admin.items.destroy');
 
-        // 白名单管理
+        // 白名单管理（角色 + 军团共用一个页面，通过 ?tab=character|corporation 切换）
         Route::get('/admin/whitelist', 'AdminController@whitelist')
             ->name('seat-audit.admin.whitelist');
         Route::post('/admin/whitelist', 'AdminController@storeWhitelist')
             ->name('seat-audit.admin.whitelist.store');
         Route::delete('/admin/whitelist/{id}', 'AdminController@destroyWhitelist')
             ->name('seat-audit.admin.whitelist.destroy');
+
+        // 军团白名单管理（独立的 store/destroy 路由，避免和角色白名单的资源冲突）
+        Route::post('/admin/corporation-whitelist', 'AdminController@storeCorporationWhitelist')
+            ->name('seat-audit.admin.corporation-whitelist.store');
+        Route::delete('/admin/corporation-whitelist/{id}', 'AdminController@destroyCorporationWhitelist')
+            ->name('seat-audit.admin.corporation-whitelist.destroy');
     });
 
     // AJAX API 路由（供前端自动补全和名称查询使用）
     Route::get('/api/characters', 'AdminController@searchCharacters')
         ->name('seat-audit.api.characters');
+    Route::get('/api/corporations', 'AdminController@searchCorporations')
+        ->name('seat-audit.api.corporations');
     Route::get('/api/item-name', 'AdminController@getItemName')
         ->name('seat-audit.api.item-name');
 });

@@ -36,15 +36,31 @@ class ViolationController extends Controller
             $auditType = 'all';
         }
 
-        // 构建基础查询：两次 LEFT JOIN seat_audit_whitelist 实现白名单软过滤
-        // - wl_chr 匹配发起方（character_id），wl_ctp 匹配接收方（counterparty_id，仅合同行有值）
-        // - 任一方命中白名单则该 violation 不在列表展示
-        // - 软过滤意味着白名单事后加/减都即时生效，DB 历史数据不变
+        // 构建基础查询：多次 LEFT JOIN 实现白名单软过滤
+        // 角色白名单（钱包+合同均生效）：
+        // - wl_chr：发起方 character_id 是否在白名单
+        // - wl_ctp：接收方 counterparty_id 是否在白名单（钱包行 counterparty_id 为 NULL，JOIN 不命中）
+        // 军团白名单（仅合同生效，ON 子句条件化 audit_type='contracts'）：
+        // - aff_chr/corp_wl_chr：发起方当前军团是否在白名单
+        // - aff_ctp/corp_wl_ctp：接收方当前军团是否在白名单
+        // 任一项命中即从结果集中排除。所有软过滤白名单更新即时生效、DB 历史数据不变。
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+            ->leftJoin('character_affiliations as aff_chr', function ($join) {
+                $join->on('aff_chr.character_id', '=', 'seat_audit_violations.character_id')
+                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+            })
+            ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('character_affiliations as aff_ctp', function ($join) {
+                $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+            })
+            ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->whereNull('wl_chr.id')
             ->whereNull('wl_ctp.id')
+            ->whereNull('corp_wl_chr.id')
+            ->whereNull('corp_wl_ctp.id')
             ->select('seat_audit_violations.*')
             ->orderBy('seat_audit_violations.violation_time', 'desc');
 
@@ -147,12 +163,24 @@ class ViolationController extends Controller
         }
 
         // 构建查询（不分页，导出全部匹配记录）
-        // 与 index() 保持一致的白名单软过滤口径：LEFT JOIN 排除 character_id 或 counterparty_id 在白名单的行
+        // 与 index() 保持一致的软过滤口径：角色白名单（双方）+ 军团白名单（仅合同行）
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+            ->leftJoin('character_affiliations as aff_chr', function ($join) {
+                $join->on('aff_chr.character_id', '=', 'seat_audit_violations.character_id')
+                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+            })
+            ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('character_affiliations as aff_ctp', function ($join) {
+                $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+            })
+            ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->whereNull('wl_chr.id')
             ->whereNull('wl_ctp.id')
+            ->whereNull('corp_wl_chr.id')
+            ->whereNull('corp_wl_ctp.id')
             ->orderBy('seat_audit_violations.violation_time', 'desc')
             ->select([
                 'seat_audit_violations.character_name',

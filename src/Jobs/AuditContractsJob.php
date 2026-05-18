@@ -59,6 +59,15 @@ class AuditContractsJob implements ShouldQueue
                 ->toArray()
         );
 
+        // 步骤2.5：预加载军团白名单 — 仅用于合同审计的额外拦截。
+        // 拦截规则：合同的 issuer corp 或 acceptor 当前所属 corp 任一在此表中即跳过整份合同。
+        // 钱包审计不受此名单影响（按 §4.4 设计决策）。
+        $corporationWhitelistIds = array_flip(
+            DB::table('seat_audit_corporation_whitelist')
+                ->pluck('corporation_id')
+                ->toArray()
+        );
+
         // 步骤3：预加载监控物品映射（type_id => item_name）。
         // 后续在 contract_items 中只拉取命中这些 type_id 的物品，降低扫描开销。
         $monitoredTypeIds = DB::table('seat_audit_monitor_items')
@@ -90,6 +99,7 @@ class AuditContractsJob implements ShouldQueue
             ->orderBy('contract_id', 'asc')
             ->chunk(self::CHUNK_SIZE, function ($contracts) use (
                 $whitelistIds,
+                $corporationWhitelistIds,
                 $monitoredTypeIds,
                 $characterNames,
                 &$maxCompletedAt
@@ -100,6 +110,17 @@ class AuditContractsJob implements ShouldQueue
                 if (empty($contractIds)) {
                     return;
                 }
+
+                // 步骤6a-2：本批 acceptor 当前所属军团 ID 映射（character_id => corporation_id）
+                // 仅拉取本批合同的 acceptor，避免一次性把全表 affiliations 搬进 PHP
+                // issuer corp 直接从合同表的 issuer_corporation_id 字段拿，无需 affiliations 查询
+                $acceptorIds = $contracts->pluck('acceptor_id')->filter()->unique()->values()->toArray();
+                $acceptorCorpMap = empty($acceptorIds)
+                    ? []
+                    : DB::table('character_affiliations')
+                        ->whereIn('character_id', $acceptorIds)
+                        ->pluck('corporation_id', 'character_id')
+                        ->toArray();
 
                 // 步骤6b：只拉取本批合同中命中监控 type_id 的物品行。
                 // 这里在 SQL 层完成 contract_id 和 type_id 双重过滤，避免把无关明细搬进 PHP。
@@ -146,12 +167,27 @@ class AuditContractsJob implements ShouldQueue
                         $maxCompletedAt = $completedAt;
                     }
 
-                    // 过滤步骤①：三方白名单拦截。
+                    // 过滤步骤①：三方角色白名单拦截。
                     // 任意一方在白名单中，整份合同跳过，不再检查物品是否命中监控名单。
                     if (
                         isset($whitelistIds[$contract->issuer_id])
                         || isset($whitelistIds[$contract->assignee_id])
                         || isset($whitelistIds[$contract->acceptor_id])
+                    ) {
+                        continue;
+                    }
+
+                    // 过滤步骤①-2：军团白名单拦截（仅合同审计生效）。
+                    // - 发起方军团：直接从 contract.issuer_corporation_id 字段（合同自带）
+                    // - 接收方军团：从 character_affiliations 查 acceptor 当前所属军团
+                    // 任一军团在白名单中即跳过整份合同
+                    $acceptorCorp = $contract->acceptor_id
+                        ? ($acceptorCorpMap[$contract->acceptor_id] ?? null)
+                        : null;
+
+                    if (
+                        isset($corporationWhitelistIds[$contract->issuer_corporation_id])
+                        || ($acceptorCorp !== null && isset($corporationWhitelistIds[$acceptorCorp]))
                     ) {
                         continue;
                     }
