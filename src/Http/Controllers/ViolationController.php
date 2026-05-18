@@ -43,12 +43,14 @@ class ViolationController extends Controller
             $auditType = 'all';
         }
 
-        // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单 + corporation_infos（用于 UI 显示双方军团）
+        // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单 + corporation_infos + universe_names（用于 UI 显示双方军团）
         // 豁免语义（两套白名单不同）：
         //  - 角色白名单：任一方在角色白名单 → 豁免（OR，单方拦截，钱包+合同均生效）
         //  - 军团白名单：发起方军团 AND 接收方军团 都在军团白名单 → 豁免（AND，仅合同生效）
         // 显示条件 = NOT(任一豁免) = 钱包+发起方不在角色白名单 OR 合同+(双方都不在角色白名单 AND 至少一方军团不在白名单)
-        // corp_chr_info / corp_ctp_info：用于 UI 渲染双方军团 name/ticker（仅合同行有值，钱包行 affiliations JOIN 因 ON 条件不命中）
+        // 军团名字双源 COALESCE：
+        //  - corporation_infos：SeAT 内部已收录的军团（有 ticker，UI 优先用）
+        //  - universe_names：外部军团 fallback（无 ticker，但至少能拿到 name）
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -58,19 +60,25 @@ class ViolationController extends Controller
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('universe_names as corp_chr_un', function ($join) {
+                $join->on('corp_chr_un.entity_id', '=', 'aff_chr.corporation_id')
+                    ->where('corp_chr_un.category', '=', 'corporation');
+            })
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
+            ->leftJoin('universe_names as corp_ctp_un', function ($join) {
+                $join->on('corp_ctp_un.entity_id', '=', 'aff_ctp.corporation_id')
+                    ->where('corp_ctp_un.category', '=', 'corporation');
+            })
             ->where(function ($q) {
-                // 钱包行：发起方不在角色白名单 → 显示
                 $q->where(function ($qw) {
                     $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
                        ->whereNull('wl_chr.id');
                 })
-                // 合同行：双方都不在角色白名单 AND 至少一方军团不在白名单 → 显示
                 ->orWhere(function ($qc) {
                     $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
                        ->whereNull('wl_chr.id')
@@ -83,9 +91,10 @@ class ViolationController extends Controller
             })
             ->select(
                 'seat_audit_violations.*',
-                'corp_chr_info.name as issuer_corp_name',
+                // corp 名字：corporation_infos 优先（含 ticker），universe_names 兜底（外部 corp）
+                DB::raw('COALESCE(corp_chr_info.name, corp_chr_un.name) as issuer_corp_name'),
                 'corp_chr_info.ticker as issuer_corp_ticker',
-                'corp_ctp_info.name as acceptor_corp_name',
+                DB::raw('COALESCE(corp_ctp_info.name, corp_ctp_un.name) as acceptor_corp_name'),
                 'corp_ctp_info.ticker as acceptor_corp_ticker'
             )
             ->orderBy('seat_audit_violations.violation_time', 'desc');
@@ -105,7 +114,7 @@ class ViolationController extends Controller
             $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
-        // 应用通用关键词模糊筛选：角色名（双方）或 军团名/ticker（双方，仅合同行有值）任一命中即返回
+        // 应用通用关键词模糊筛选：角色名（双方）或 军团名/ticker（双方，corporation_infos + universe_names 兜底）任一命中即返回
         // 用 where(Closure) 包成 OR 子句，避免和外层 AND 优先级冲突
         if ($keyword !== '') {
             $like = '%' . $keyword . '%';
@@ -115,7 +124,9 @@ class ViolationController extends Controller
                   ->orWhere('corp_chr_info.name', 'LIKE', $like)
                   ->orWhere('corp_chr_info.ticker', 'LIKE', $like)
                   ->orWhere('corp_ctp_info.name', 'LIKE', $like)
-                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like);
+                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like)
+                  ->orWhere('corp_chr_un.name', 'LIKE', $like)
+                  ->orWhere('corp_ctp_un.name', 'LIKE', $like);
             });
         }
 
@@ -227,7 +238,7 @@ class ViolationController extends Controller
         }
 
         // 构建查询（不分页，导出全部匹配记录）
-        // 与 index() 保持一致的软过滤豁免语义 + 双方军团 JOIN
+        // 与 index() 保持一致的软过滤豁免语义 + 双方军团 JOIN + universe_names 兜底
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -237,12 +248,20 @@ class ViolationController extends Controller
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
+            ->leftJoin('universe_names as corp_chr_un', function ($join) {
+                $join->on('corp_chr_un.entity_id', '=', 'aff_chr.corporation_id')
+                    ->where('corp_chr_un.category', '=', 'corporation');
+            })
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
+            ->leftJoin('universe_names as corp_ctp_un', function ($join) {
+                $join->on('corp_ctp_un.entity_id', '=', 'aff_ctp.corporation_id')
+                    ->where('corp_ctp_un.category', '=', 'corporation');
+            })
             ->where(function ($q) {
                 $q->where(function ($qw) {
                     $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
@@ -262,9 +281,9 @@ class ViolationController extends Controller
             ->select([
                 'seat_audit_violations.character_name',
                 'seat_audit_violations.counterparty_name',
-                'corp_chr_info.name as issuer_corp_name',
+                DB::raw('COALESCE(corp_chr_info.name, corp_chr_un.name) as issuer_corp_name'),
                 'corp_chr_info.ticker as issuer_corp_ticker',
-                'corp_ctp_info.name as acceptor_corp_name',
+                DB::raw('COALESCE(corp_ctp_info.name, corp_ctp_un.name) as acceptor_corp_name'),
                 'corp_ctp_info.ticker as acceptor_corp_ticker',
                 'seat_audit_violations.item_name',
                 'seat_audit_violations.amount',
@@ -300,7 +319,9 @@ class ViolationController extends Controller
                   ->orWhere('corp_chr_info.name', 'LIKE', $like)
                   ->orWhere('corp_chr_info.ticker', 'LIKE', $like)
                   ->orWhere('corp_ctp_info.name', 'LIKE', $like)
-                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like);
+                  ->orWhere('corp_ctp_info.ticker', 'LIKE', $like)
+                  ->orWhere('corp_chr_un.name', 'LIKE', $like)
+                  ->orWhere('corp_ctp_un.name', 'LIKE', $like);
             });
         }
 

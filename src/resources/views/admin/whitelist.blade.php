@@ -61,6 +61,9 @@
                                     <div id="search-results" class="list-group"
                                          style="position: absolute; z-index: 1000; width: calc(100% - 30px); display: none; max-height: 300px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
                                     </div>
+                                    <small class="text-muted">
+                                        本地搜索来自 SeAT 已收录的角色；如果搜不到外部角色，列表底部会出现「在 ESI 中精确查找」按钮，用 EVE 官方接口按完整名字查找。
+                                    </small>
                                 </div>
                                 <div class="form-group col-md-2 d-flex align-items-end">
                                     <input type="text" name="character_name" id="character-name-display"
@@ -241,7 +244,7 @@ $(function() {
 
                 if (data.length === 0) {
                     resultsBox.append(
-                        '<div class="list-group-item text-muted">未找到匹配的角色</div>'
+                        '<div class="list-group-item text-muted">本地未找到匹配角色</div>'
                     );
                 } else {
                     $.each(data, function(i, char) {
@@ -253,6 +256,18 @@ $(function() {
                             '</a>'
                         );
                     });
+                }
+
+                // 兜底：本地搜不全可点击「在 ESI 中精确查找」按钮，调外部接口（需完整精确名字）
+                // 长度 3+ 才显示，避免「ab」等过短关键词触发无意义 ESI 调用
+                if (keyword.length >= 3) {
+                    resultsBox.append(
+                        '<a href="#" class="list-group-item list-group-item-action list-group-item-info esi-search-trigger" ' +
+                        'data-name="' + $('<span>').text(keyword).html() + '">' +
+                        '<i class="fas fa-globe"></i> 在 ESI 中精确查找 <strong>"' + $('<span>').text(keyword).html() + '"</strong>' +
+                        ' <small class="text-muted">（用于加入非 SeAT 内角色，要求完整名字精确匹配）</small>' +
+                        '</a>'
+                    );
                 }
 
                 resultsBox.show();
@@ -270,6 +285,48 @@ $(function() {
         searchInput.val(charName);
         submitBtn.prop('disabled', false);
         resultsBox.hide().empty();
+    });
+
+    // ESI 兜底搜索：点击触发，调外部接口按完整名字查 ID
+    resultsBox.on('click', '.esi-search-trigger', function(e) {
+        e.preventDefault();
+        var name = $(this).data('name');
+        var $trigger = $(this);
+
+        // loading 状态：替换文案，禁止重复点击
+        $trigger.removeClass('list-group-item-info').addClass('disabled')
+                .html('<i class="fas fa-spinner fa-spin"></i> 正在 ESI 查找...');
+
+        $.getJSON('{{ route("seat-audit.api.characters.esi") }}', { name: name })
+            .done(function (data) {
+                // 把外部结果作为可点击项追加到列表前部，让用户像本地结果一样选择
+                if (!data.characters || data.characters.length === 0) {
+                    $trigger.removeClass('disabled')
+                            .html('<i class="fas fa-exclamation-circle"></i> ESI 未找到该角色（名字必须完整精确匹配）');
+                    return;
+                }
+
+                // 移除触发按钮
+                $trigger.remove();
+
+                // 把每个 ESI 结果作为 .character-option 加入列表顶部
+                $.each(data.characters, function (i, char) {
+                    resultsBox.prepend(
+                        '<a href="#" class="list-group-item list-group-item-action list-group-item-warning character-option" ' +
+                        'data-id="' + char.character_id + '" data-name="' + $('<span>').text(char.name).html() + '">' +
+                        '<i class="fas fa-globe"></i> <strong>' + $('<span>').text(char.name).html() + '</strong>' +
+                        '<small class="text-muted ml-2">ID: ' + char.character_id + '（来自 ESI 外部）</small>' +
+                        '</a>'
+                    );
+                });
+            })
+            .fail(function (xhr) {
+                var msg = xhr.responseJSON && xhr.responseJSON.error
+                    ? xhr.responseJSON.error
+                    : 'ESI 调用失败（HTTP ' + xhr.status + '）';
+                $trigger.removeClass('disabled')
+                        .html('<i class="fas fa-exclamation-triangle text-danger"></i> ' + $('<span>').text(msg).html());
+            });
     });
 
     // ============== 军团搜索 ==============

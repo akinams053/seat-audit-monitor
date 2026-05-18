@@ -137,8 +137,8 @@
                     <form method="POST" action="{{ route('seat-audit.violations.resolve-unknown') }}" class="form-inline d-inline ml-1">
                         @csrf
                         <button type="submit" class="btn btn-sm btn-info"
-                                title="批量调 ESI 公开接口解析「Unknown (ID: X)」类型的外部角色名">
-                            <i class="fas fa-sync"></i> 解析未知名字
+                                title="批量调 ESI 公开接口解析「Unknown (ID: X)」外部角色名 + 当前所属军团 + 军团名字">
+                            <i class="fas fa-sync"></i> 解析未知来源
                         </button>
                     </form>
                     <a href="{{ route('seat-audit.admin.items') }}" class="btn btn-sm btn-primary ml-1">
@@ -170,7 +170,7 @@
                             <th>物品名称</th>
                             <th>交易金额 (ISK)</th>
                             <th>来源</th>
-                            <th>Contract ID</th>
+                            <th>合同详情</th>
                             <th>发生时间</th>
                         </tr>
                     </thead>
@@ -254,16 +254,16 @@
                                     -
                                 @endif
                             </td>
-                            {{-- Contract ID：合同行作为按钮触发 modal 显示快照详情 --}}
+                            {{-- 合同详情：合同行作为按钮触发 modal 显示快照详情；样式为可点击按钮，显示 #contract_id --}}
                             <td>
                                 @if($v->audit_type === 'contracts')
                                     <button type="button"
-                                            class="btn btn-link btn-sm p-0 contract-detail-btn"
+                                            class="btn btn-outline-primary btn-sm contract-detail-btn"
                                             data-toggle="modal"
                                             data-target="#contractDetailModal"
                                             data-violation='@json($contractModalPayload)'
-                                            title="点击查看合同详情">
-                                        <code>{{ $v->contract_id }}</code>
+                                            title="点击查看合同详情 (ID: {{ $v->contract_id }})">
+                                        <i class="fas fa-file-contract"></i> #{{ $v->contract_id }}
                                     </button>
                                 @else
                                     -

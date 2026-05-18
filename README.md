@@ -23,7 +23,8 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
 - **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
-- **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口 `/universe/names/` 批量解析并回填，或 Artisan `seat:audit:resolve-unknown-names`
+- **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口同时解析**角色名 + 当前所属军团 + 军团名字**并回写本地缓存（`universe_names` + `character_affiliations`），或 Artisan `seat:audit:resolve-unknown-names`
+- **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
 ## 环境要求
@@ -213,6 +214,7 @@ sudo -u www-data php artisan config:clear
 **角色白名单**（钱包+合同均生效）
 - 输入角色名搜索，选择后自动填入 character_id
 - 白名单角色的所有交易将被完全跳过
+- **外部角色（非 SeAT 内）**：本地搜不到时下拉菜单底部会出现「在 ESI 中精确查找 'XXX'」按钮（输入 ≥3 字符触发），点击调 EVE 官方接口按完整名字查 ID 后加入白名单
 
 **军团白名单**（仅合同生效）
 - 输入军团名或 ticker 搜索（数据源是 SeAT 已收录的 corporation_infos）
@@ -263,15 +265,20 @@ sudo -u www-data php artisan seat:audit:scan --type=contracts
 
 **触发方式**（任一即可，admin 权限）：
 
-- Web 界面：违规记录页右上角 **解析未知名字** 按钮。任务异步入 Horizon 队列，几秒~几十秒后刷新页面可见结果。
+- Web 界面：违规记录页右上角 **解析未知来源** 按钮。任务异步入 Horizon 队列，几秒~几十秒后刷新页面可见结果。
 - 命令行：`sudo -u www-data php artisan seat:audit:resolve-unknown-names`（同步执行）。
 
-**工作原理**：扫描 `seat_audit_violations` 表所有 character_name/counterparty_name 仍是 "Unknown (ID:%)" 的行，去重收集 character_id，按 1000 一批 POST 到 ESI 公开接口 `/universe/names/`（无需 token），仅取 `category=character` 的结果回写。
+**工作原理**（三步走，均调 ESI 公开接口，无需 token）：
+
+1. **解析角色名** — `POST /universe/names/` 把所有 Unknown 的 character_id 解析为名字，UPDATE 到 `seat_audit_violations` + UPSERT 到 `universe_names`（SeAT 共用名字缓存）
+2. **解析当前军团** — `POST /characters/affiliation/` 拿到 char→corp 映射，UPSERT 到 `character_affiliations`（让 UI 能 JOIN 出当前军团）
+3. **解析军团名字** — `POST /universe/names/` 把上一步拿到的所有 corp_id 解析为军团名，UPSERT 到 `universe_names`（违规列表「发起方军团/接收方军团」列就能显示外部军团名）
 
 **注意**：
 - ESI 整批包含已注销/无效 ID 时该批可能返回 4xx，本插件按设计跳过失败批次，下次重跑会再试
 - 详细进度看 `storage/logs/laravel.log` 中 `[seat-audit:resolve-unknown]` 前缀
-- 已解析过的名字下次不会重复请求（WHERE 子句限定 LIKE 'Unknown%'）
+- 已解析过的 ID 不会重复请求（角色名 WHERE 限定 `LIKE 'Unknown%'`；affiliation/corp 名字会先查 `character_affiliations`/`universe_names` 已有的跳过）
+- 外部军团目前只能拿到 name 没有 ticker（ESI 单调用慢，未做 ticker fallback），UI 显示军团名而非 ticker
 
 ### 6. 配置定时自动扫描（可选）
 

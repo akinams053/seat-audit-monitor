@@ -129,11 +129,12 @@
 
 ## 6. 开发约束
 - **性能优先**：后台扫描器使用 `DB::table()` 直接查询。
-- **UI 规范**：违规记录列表需直观显示发起方/发起方军团/接收方/接收方军团/物品/金额/来源/Contract ID/时间。
-    - 双方军团通过 `character_affiliations` JOIN 实时拿（当前 affiliation 语义），UI 显示 ticker、hover 显示全名。
+- **UI 规范**：违规记录列表需直观显示发起方/发起方军团/接收方/接收方军团/物品/金额/来源/合同详情/时间。
+    - 双方军团通过 `character_affiliations` JOIN `corporation_infos` 实时拿（当前 affiliation 语义），UI 显示 ticker、hover 显示全名。
+    - 外部军团（不在 SeAT `corporation_infos`）通过 LEFT JOIN `universe_names` 兜底，COALESCE 优先 corporation_infos 再 universe_names。
     - 「来源」列按 `audit_type` + `contract_availability` 细分：钱包 / 合同·公开 / 合同·私人 / 合同·军团 / 合同·联盟。
-    - 通用关键词搜索框模糊匹配 character_name / counterparty_name / 双方 corp.name / 双方 corp.ticker 任一命中。
-    - 合同行的 Contract ID 是可点击按钮，触发 modal 显示完整合同/物品/三方角色快照（数据源自 `details` JSON）。
+    - 通用关键词搜索框模糊匹配 character_name / counterparty_name / 双方 corporation_infos.name+ticker / 双方 universe_names.name 任一命中。
+    - 「合同详情」列：合同行的 Contract ID 渲染为可点击按钮（btn-outline-primary 样式，显示 `#contract_id`），触发 modal 显示完整合同/物品/三方角色快照（数据源自 `details` JSON）。
 - **权限**：
     - `seat-audit-monitor.view`：查看违规记录、导出 CSV。
     - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描、ESI 解析未知名字。
@@ -175,10 +176,11 @@ scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
 ```
 
 ## 8. 扩展规划 (Roadmap)
-当前已支持：市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免、外部角色名 ESI 批量解析（`ResolveUnknownNamesJob` / `seat:audit:resolve-unknown-names` / UI 按钮）。后续可考虑：
+当前已支持：市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免、外部角色 + 当前军团 ESI 批量解析（`ResolveUnknownNamesJob` / `seat:audit:resolve-unknown-names` / UI「解析未知来源」按钮，同时 UPSERT `universe_names` + `character_affiliations`）、白名单加入支持 ESI 精确名字查找外部角色（`/api/characters/esi`）。后续可考虑:
 - **联盟白名单**：当前已支持角色 + 军团两级白名单。合同的 `assignee_id` 可能是 alliance ID，跨联盟合同仍可能绕过。可扩展为三级白名单或统一 entity_type 模型。
 - **assignee 字段成列**：当前 `assignee_id` 仅在 `details` JSON 内，软过滤无法覆盖"白名单事后新增 assignee-only 角色"的边角场景。可考虑在 violations 表加 `assignee_id` 快照列。
 - **钱包日志 (Donation) 审计**：直接 ISK 转账（`ref_type='player_donation'`）目前不审，可作为新审计类型加入；技术上需要新的 `AuditDonationsJob` + `audit_type='donations'` 水位线。
 - **合同金额按 LP 价值核算**：当前 `amount = max(price, reward)`，零金额合同 amount=0。可引入 LP 价格表或 evepraisal 估值，把零金额合同的物品市场价合算进 amount。
 - **ESI 解析定时化**：当前需手动触发。可加到 SeAT schedule 中每日自动跑。
+- **军团 ticker 兜底**：外部军团仅靠 `universe_names` 拿到 name 但没 ticker。可加自建 cache 表存 ticker（来源 `GET /corporations/{id}/`，单调用慢）。
 - **监控名单复用**：`seat_audit_monitor_items` 已跨审计类型共用，无需扩展。

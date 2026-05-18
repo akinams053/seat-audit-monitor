@@ -59,6 +59,9 @@ Route::group([
     // AJAX API 路由（供前端自动补全和名称查询使用）
     Route::get('/api/characters', 'AdminController@searchCharacters')
         ->name('seat-audit.api.characters');
+    // ESI 精确名字 → 角色 ID 查找（用于白名单加入非 SeAT 内角色）
+    Route::get('/api/characters/esi', 'AdminController@searchCharactersEsi')
+        ->name('seat-audit.api.characters.esi');
     Route::get('/api/corporations', 'AdminController@searchCorporations')
         ->name('seat-audit.api.corporations');
     Route::get('/api/item-name', 'AdminController@getItemName')

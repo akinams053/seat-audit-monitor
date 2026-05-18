@@ -8,6 +8,8 @@ namespace Seat\SeatAuditMonitor\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class AdminController extends Controller
 {
@@ -191,6 +193,53 @@ class AdminController extends Controller
             ->get(['character_id', 'name']);
 
         return response()->json($results);
+    }
+
+    /**
+     * 在 ESI 公开接口按角色名精确查找 character_id（无需 token）
+     * 用于白名单加入「不在 SeAT 内」的外部角色
+     * 请求参数：name=完整角色名（ESI 大小写不敏感，但必须完整匹配）
+     * 返回格式：{character_id: 12345, name: "Pilot Name"} 或 {error: "..."}
+     */
+    public function searchCharactersEsi(Request $request)
+    {
+        $name = trim((string) $request->input('name', ''));
+
+        // 至少 3 字符避免误触；最长 37 字符（EVE 角色名上限）
+        if (mb_strlen($name) < 3 || mb_strlen($name) > 37) {
+            return response()->json(['error' => '请输入完整角色名（3-37 字符）'], 400);
+        }
+
+        try {
+            $response = Http::timeout(15)
+                ->acceptJson()
+                ->asJson()
+                ->post('https://esi.evetech.net/latest/universe/ids/', [$name]);
+        } catch (\Throwable $e) {
+            Log::warning('[seat-audit:esi-id-search] HTTP 异常：' . $e->getMessage());
+            return response()->json(['error' => 'ESI 调用失败：' . $e->getMessage()], 502);
+        }
+
+        if (!$response->successful()) {
+            return response()->json([
+                'error' => 'ESI 返回非成功状态 ' . $response->status(),
+            ], 502);
+        }
+
+        $data = $response->json();
+        $characters = $data['characters'] ?? [];
+
+        if (empty($characters)) {
+            return response()->json(['error' => '未在 ESI 找到该角色（名字必须完整且精确匹配）'], 404);
+        }
+
+        // ESI 可能返回多个完全同名角色（罕见但可能）；都返回让前端列出
+        return response()->json([
+            'characters' => array_map(fn ($c) => [
+                'character_id' => $c['id'],
+                'name'         => $c['name'],
+            ], $characters),
+        ]);
     }
 
     /**
