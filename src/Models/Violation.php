@@ -1,6 +1,6 @@
 <?php
 
-// src/Models/Violation.php
+// /Users/akina/project/seat-audit-monitor/src/Models/Violation.php
 // 违规记录模型
 
 namespace Seat\SeatAuditMonitor\Models;
@@ -23,6 +23,8 @@ class Violation extends ExtensibleModel
         'amount',
         'violation_time',
         'details',
+        'audit_type',
+        'contract_id',
     ];
 
     // details 字段自动序列化/反序列化为数组
