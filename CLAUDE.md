@@ -54,8 +54,11 @@
 3. **物品匹配**：检查 `type_id` 是否在 `seat_audit_monitor_items` 名单内。只要匹配，即判定为违规。
 
 ### 4.2 合同审计 (contracts)
-- **水位线**：通过 `seat_audit_status` 获取 `last_completed_at`，仅查询 `date_completed > last_completed_at` 的合同；首次扫描以 `1970-01-01` 作为基线全量回扫。
+- **水位线**：通过 `seat_audit_status` 获取 `last_completed_at`，仅查询 `date_completed > last_completed_at` 的合同。
+- **初始基线**：migration 预置为 `2026-01-01 00:00:00`（2026 年前合同体量大但业务价值低，作为历史数据完全跳过）。代码兜底为 `1970-01-01`，但常规部署不会落入兜底分支。
+- **临时回扫**：`AuditContractsJob` 构造函数接受可选 `?Carbon $sinceOverride`；通过 `AuditScanCommand --since=YYYY-MM-DD` 注入。使用 `sinceOverride` 时**不推进水位线**，避免破坏正常增量轨迹。
 - **批处理**：`contract_details` 用 `chunk(500)`，在 chunk 内一次性 JOIN `contract_items` 拉本批所有命中监控 type_id 的物品行。
+- **索引**：插件 migration 在 `contract_details(status, type, date_completed)` 上加复合索引 `idx_audit_contract_scan`，让 WHERE 从全表 scan 变为 range scan。
 
 过滤流程：
 1. **状态/类型筛选**：仅审 `status='finished'` 且 `type IN ('item_exchange','auction')`（跳过 courier/loan/unknown，避免物权未转移的误报）。

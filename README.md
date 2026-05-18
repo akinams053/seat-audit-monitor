@@ -110,16 +110,36 @@ sudo -u www-data php artisan view:clear
 
 1. 侧边栏点击 **违规记录**，确认筛选区出现 **审计类型** 下拉
 2. 表格出现 **来源** 列与 **Contract ID** 列；历史 wallet 数据应自动归类为"钱包"
-3. 命令行试跑合同审计：
+3. **首次合同回扫推荐用命令行**（避免 Web 同步按钮被 nginx/php-fpm 60s 超时切断）：
    ```bash
    sudo -u www-data php artisan seat:audit:scan --type=contracts
    ```
-   首次运行会按 `1970-01-01` 基线全量回扫已完成合同，根据合同体量耗时几秒到几分钟
+   插件 migration 已预置基线 `2026-01-01`，**2026 年以前的合同完全跳过**。首次回扫的实际范围取决于 2026 年起的 finished 合同体量，索引就绪后通常 10–30 秒内完成。
 4. 检查水位线已推进：
    ```bash
    sudo mariadb seat -e "SELECT audit_type, last_id, last_completed_at FROM seat_audit_status;"
    ```
-   应看到 `contracts` 行的 `last_completed_at` 不再为 NULL
+   应看到 `contracts` 行的 `last_completed_at` 已超过 `2026-01-01`（推进到实际处理过的最晚合同完成时间）。
+
+### 回扫历史合同（可选）
+
+默认基线 `2026-01-01` 跳过历史。如果某次需要回扫某段历史，使用 `--since` 临时覆盖：
+
+```bash
+# 回扫 2025 全年（仅本次有效，不修改水位线）
+sudo -u www-data php artisan seat:audit:scan --type=contracts --since=2025-01-01
+
+# 回扫某天起的合同
+sudo -u www-data php artisan seat:audit:scan --type=contracts --since="2025-06-01 00:00:00"
+```
+
+⚠ **注意**：`--since` 会**重复处理已扫过的合同**（`seat_audit_violations` 表无去重约束），可能产生重复行。建议先 `DELETE FROM seat_audit_violations WHERE audit_type='contracts' AND violation_time >= '<since>'` 清掉对应区间再回扫。
+
+如果希望永久改基线（例如未来想从 2025 起持续审计），直接改水位线行即可：
+
+```sql
+UPDATE seat_audit_status SET last_completed_at = '2025-01-01 00:00:00' WHERE audit_type = 'contracts';
+```
 
 ### 升级回滚（不满意可退回）
 

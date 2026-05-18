@@ -28,12 +28,27 @@ class AuditContractsJob implements ShouldQueue
      */
     const CHUNK_SIZE = 500;
 
+    /**
+     * 一次性回扫起点（覆盖水位线）。
+     * 默认 null，按常规增量从 seat_audit_status.last_completed_at 推进。
+     * 由调用方通过构造函数注入，例如 AuditScanCommand --since 选项；
+     * 使用此参数时本次扫描**不会推进水位线**，避免临时回扫破坏正常增量进度。
+     */
+    public readonly ?Carbon $sinceOverride;
+
+    public function __construct(?Carbon $sinceOverride = null)
+    {
+        $this->sinceOverride = $sinceOverride;
+    }
+
     public function handle()
     {
-        // 步骤1：读取合同审计的完成时间水位线。
-        // 首次运行时数据库中没有 last_completed_at，因此使用 Unix 纪元作为全量扫描基线。
-        // 用 ?? 而非 ?:：仅在 null 时兜底，避免误把 Carbon 对象当 falsy 处理（语义更精确）
-        $lastCompletedAt = AuditStatus::getLastCompletedAt(self::AUDIT_TYPE)
+        // 步骤1：决定本次扫描起点。
+        // - 若调用方注入了 sinceOverride（如 --since 命令行回扫），优先使用该值，且本次不推进水位线
+        // - 否则按常规从水位线 last_completed_at 增量扫描；首次运行（无水位线行）会兜底到 Unix 纪元
+        //   注：本插件 migration 已预置 contracts 基线为 2026-01-01，正常情况下不会落入兜底分支
+        $lastCompletedAt = $this->sinceOverride
+            ?? AuditStatus::getLastCompletedAt(self::AUDIT_TYPE)
             ?? Carbon::createFromTimestamp(0);
 
         // 步骤2：预加载白名单角色 ID，并翻转为哈希表。
@@ -211,8 +226,9 @@ class AuditContractsJob implements ShouldQueue
             });
 
         // 步骤7：扫描完成后推进 date_completed 水位线。
-        // 只有确实处理到更晚的合同时才更新，避免空跑覆盖原有进度。
-        if ($maxCompletedAt->gt($lastCompletedAt)) {
+        // 仅在常规增量模式下推进（sinceOverride=null）；--since 临时回扫保留原水位线，
+        // 避免一次性回扫的进度污染正常增量轨迹。
+        if ($this->sinceOverride === null && $maxCompletedAt->gt($lastCompletedAt)) {
             AuditStatus::setLastCompletedAt(self::AUDIT_TYPE, $maxCompletedAt);
         }
     }
