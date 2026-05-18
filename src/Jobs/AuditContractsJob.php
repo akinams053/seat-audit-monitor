@@ -167,12 +167,17 @@ class AuditContractsJob implements ShouldQueue
                     $amount = max((float) $contract->price, (float) $contract->reward);
 
                     // parties 快照保存三方名称，避免后续 character_infos 变化影响历史审计记录。
-                    $issuerName = $characterNames[$contract->issuer_id]
-                        ?? 'Unknown (ID: ' . $contract->issuer_id . ')';
-                    $assigneeName = $characterNames[$contract->assignee_id]
-                        ?? 'Unknown (ID: ' . $contract->assignee_id . ')';
-                    $acceptorName = $characterNames[$contract->acceptor_id]
-                        ?? 'Unknown (ID: ' . $contract->acceptor_id . ')';
+                    // 三方 ID 在边角情况下可能为空（公开合同的 assignee 等），空 ID 不构造「Unknown (ID: )」字符串，
+                    // 保留 null 以便上层渲染统一兜底为 '-'。
+                    $issuerName = $contract->issuer_id
+                        ? ($characterNames[$contract->issuer_id] ?? 'Unknown (ID: ' . $contract->issuer_id . ')')
+                        : null;
+                    $assigneeName = $contract->assignee_id
+                        ? ($characterNames[$contract->assignee_id] ?? 'Unknown (ID: ' . $contract->assignee_id . ')')
+                        : null;
+                    $acceptorName = $contract->acceptor_id
+                        ? ($characterNames[$contract->acceptor_id] ?? 'Unknown (ID: ' . $contract->acceptor_id . ')')
+                        : null;
 
                     foreach ($matchedItems as $item) {
                         // 违规粒度为一个 (contract_id, type_id) 一条记录。

@@ -14,10 +14,12 @@ class Violation extends ExtensibleModel
     // 仅有 created_at，无 updated_at
     const UPDATED_AT = null;
 
-    // 允许批量赋值的字段
+    // 允许批量赋值的字段（与表 schema 保持同步，便于未来通过 Eloquent 写入）
     protected $fillable = [
         'character_id',
         'character_name',
+        'counterparty_id',
+        'counterparty_name',
         'type_id',
         'item_name',
         'amount',

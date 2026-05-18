@@ -28,13 +28,12 @@ class BackfillCounterpartyForExistingViolations extends Migration
                 'counterparty_name' => '市场',
             ]);
 
-        // 步骤2：合同历史按主键 chunk 处理。chunkById 以主键推进游标，UPDATE 不影响遍历完整性
+        // 步骤2：合同历史按主键 chunk 处理。chunkById 内部默认按 id 推进游标，UPDATE 不影响遍历完整性
         // 仅遍历尚未回填的行；同时跳过 details 反序列化失败的异常数据
         DB::table('seat_audit_violations')
             ->where('audit_type', 'contracts')
             ->whereNull('counterparty_id')
             ->whereNull('counterparty_name')
-            ->orderBy('id')
             ->chunkById(self::CHUNK_SIZE, function ($rows) {
                 foreach ($rows as $row) {
                     // details 列在表层声明为 JSON：从 DB::table 拿出来通常是字符串，统一 decode 成数组
