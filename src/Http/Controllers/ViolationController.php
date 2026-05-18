@@ -30,6 +30,12 @@ class ViolationController extends Controller
         $startDate = request('start_date');
         $endDate   = request('end_date');
         $auditType = request('audit_type', 'all');
+        // 角色名关键词：模糊匹配 character_name（发起方）或 counterparty_name（接收方）
+        // 留空表示不限；trim 后取最多 100 字符避免异常输入
+        $characterName = trim((string) request('character_name', ''));
+        if ($characterName !== '') {
+            $characterName = mb_substr($characterName, 0, 100);
+        }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
         if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
@@ -79,17 +85,28 @@ class ViolationController extends Controller
             $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
+        // 应用角色名模糊筛选：发起方或接收方任一命中即返回
+        // 用 where(Closure) 包成 (col LIKE OR col LIKE)，避免和外层 AND 优先级问题
+        if ($characterName !== '') {
+            $like = '%' . $characterName . '%';
+            $query->where(function ($q) use ($like) {
+                $q->where('seat_audit_violations.character_name', 'LIKE', $like)
+                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like);
+            });
+        }
+
         // 分页展示，每页 50 条，保留筛选参数以便翻页时不丢失条件
         $paginationParams = array_filter([
-            'start_date' => $startDate,
-            'end_date'   => $endDate,
-            'audit_type' => $auditType !== 'all' ? $auditType : '',
+            'start_date'     => $startDate,
+            'end_date'       => $endDate,
+            'audit_type'     => $auditType !== 'all' ? $auditType : '',
+            'character_name' => $characterName,
         ]);
         $violations = $query->paginate(50)->appends($paginationParams);
 
         return view(
             'seat-audit-monitor::violations.index',
-            compact('violations', 'startDate', 'endDate', 'auditType')
+            compact('violations', 'startDate', 'endDate', 'auditType', 'characterName')
         );
     }
 
@@ -156,6 +173,11 @@ class ViolationController extends Controller
         $startDate = request('start_date');
         $endDate   = request('end_date');
         $auditType = request('audit_type', 'all');
+        // 角色名关键词：与 index() 一致的模糊匹配语义
+        $characterName = trim((string) request('character_name', ''));
+        if ($characterName !== '') {
+            $characterName = mb_substr($characterName, 0, 100);
+        }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
         if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
@@ -207,6 +229,15 @@ class ViolationController extends Controller
         // 应用截止时间筛选
         if ($endDate) {
             $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
+        }
+
+        // 角色名模糊筛选与 index() 同语义
+        if ($characterName !== '') {
+            $like = '%' . $characterName . '%';
+            $query->where(function ($q) use ($like) {
+                $q->where('seat_audit_violations.character_name', 'LIKE', $like)
+                  ->orWhere('seat_audit_violations.counterparty_name', 'LIKE', $like);
+            });
         }
 
         $records = $query->get();

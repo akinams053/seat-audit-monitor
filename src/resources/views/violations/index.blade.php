@@ -59,30 +59,46 @@
                                class="form-control form-control-sm"
                                value="{{ $endDate ?? '' }}">
                     </div>
+                    {{-- 角色名模糊筛选：发起方/接收方任一命中即返回 --}}
+                    <div class="form-group mr-3">
+                        <label for="character_name" class="mr-2">角色名</label>
+                        <input type="text"
+                               id="character_name"
+                               name="character_name"
+                               class="form-control form-control-sm"
+                               placeholder="发起方/接收方"
+                               value="{{ $characterName ?? '' }}"
+                               maxlength="100"
+                               style="min-width: 180px;">
+                    </div>
                     <button type="submit" class="btn btn-sm btn-primary mr-2">
                         <i class="fas fa-search"></i> 筛选
                     </button>
-                    {{-- 清除日期筛选条件，保留非全部审计类型 --}}
-                    <a href="{{ route('seat-audit.violations.index', array_filter(['audit_type' => ($auditType ?? 'all') !== 'all' ? $auditType : ''])) }}" class="btn btn-sm btn-secondary mr-3">
+                    {{-- 清除所有筛选条件 --}}
+                    <a href="{{ route('seat-audit.violations.index') }}" class="btn btn-sm btn-secondary mr-3">
                         <i class="fas fa-times"></i> 清除
                     </a>
                     {{-- 导出当前筛选条件下的全部记录为 CSV --}}
                     <a href="{{ route('seat-audit.violations.export', array_filter([
-                        'audit_type' => ($auditType ?? 'all') !== 'all' ? $auditType : '',
-                        'start_date' => $startDate ?? '',
-                        'end_date' => $endDate ?? '',
+                        'audit_type'     => ($auditType ?? 'all') !== 'all' ? $auditType : '',
+                        'start_date'     => $startDate ?? '',
+                        'end_date'       => $endDate ?? '',
+                        'character_name' => $characterName ?? '',
                     ])) }}"
                        class="btn btn-sm btn-success">
                         <i class="fas fa-file-excel"></i> 导出 CSV (Excel)
                     </a>
                 </form>
                 {{-- 提示当前筛选状态 --}}
-                @if($startDate || $endDate || ($auditType ?? 'all') !== 'all')
+                @if($startDate || $endDate || ($auditType ?? 'all') !== 'all' || !empty($characterName))
                 <div class="mt-2 text-muted small">
                     <i class="fas fa-info-circle"></i>
                     当前筛选：
                     @if(($auditType ?? 'all') !== 'all')
                         <br>审计类型：<strong>{{ $auditTypeLabels[$auditType] ?? $auditType }}</strong>
+                    @endif
+                    @if(!empty($characterName))
+                        <br>角色名包含：<strong>{{ $characterName }}</strong>（发起方或接收方）
                     @endif
                     @if($startDate) 从 <strong>{{ $startDate }}</strong> @endif
                     @if($endDate) 至 <strong>{{ $endDate }}</strong> @endif
