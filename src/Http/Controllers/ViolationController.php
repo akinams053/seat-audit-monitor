@@ -42,14 +42,12 @@ class ViolationController extends Controller
             $auditType = 'all';
         }
 
-        // 构建基础查询：多次 LEFT JOIN 实现白名单软过滤
-        // 角色白名单（钱包+合同均生效）：
-        // - wl_chr：发起方 character_id 是否在白名单
-        // - wl_ctp：接收方 counterparty_id 是否在白名单（钱包行 counterparty_id 为 NULL，JOIN 不命中）
-        // 军团白名单（仅合同生效，ON 子句条件化 audit_type='contracts'）：
-        // - aff_chr/corp_wl_chr：发起方当前军团是否在白名单
-        // - aff_ctp/corp_wl_ctp：接收方当前军团是否在白名单
-        // 任一项命中即从结果集中排除。所有软过滤白名单更新即时生效、DB 历史数据不变。
+        // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单（仅合同行 ON 条件化）
+        // 软过滤豁免语义：
+        //  - 钱包行：发起方在角色白名单 → 豁免（对手方是市场，无双方概念）
+        //  - 合同行：发起方 AND 接收方 都在白名单（角色或军团）→ 豁免；任一方在白名单外即显示
+        // 「单方在白名单」= 个人在角色白名单 OR 当前所属军团在军团白名单
+        // 显示条件（按德摩根）= 钱包+发起方不在角色白名单 OR 合同+任一方完全不在任何白名单
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -63,10 +61,29 @@ class ViolationController extends Controller
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
-            ->whereNull('wl_chr.id')
-            ->whereNull('wl_ctp.id')
-            ->whereNull('corp_wl_chr.id')
-            ->whereNull('corp_wl_ctp.id')
+            ->where(function ($q) {
+                // 钱包行：发起方不在角色白名单则显示（counterparty 为市场，不参与判定）
+                $q->where(function ($qw) {
+                    $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
+                       ->whereNull('wl_chr.id');
+                })
+                // 合同行：发起方"完全不在白名单" 或 接收方"完全不在白名单" → 显示
+                ->orWhere(function ($qc) {
+                    $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
+                       ->where(function ($qcc) {
+                           // 发起方完全不在任何白名单
+                           $qcc->where(function ($qi) {
+                               $qi->whereNull('wl_chr.id')
+                                  ->whereNull('corp_wl_chr.id');
+                           })
+                           // 或 接收方完全不在任何白名单
+                           ->orWhere(function ($qa) {
+                               $qa->whereNull('wl_ctp.id')
+                                  ->whereNull('corp_wl_ctp.id');
+                           });
+                       });
+                });
+            })
             ->select('seat_audit_violations.*')
             ->orderBy('seat_audit_violations.violation_time', 'desc');
 
@@ -185,7 +202,7 @@ class ViolationController extends Controller
         }
 
         // 构建查询（不分页，导出全部匹配记录）
-        // 与 index() 保持一致的软过滤口径：角色白名单（双方）+ 军团白名单（仅合同行）
+        // 与 index() 保持一致的软过滤豁免语义（钱包：单方拦截；合同：双方都在白名单才豁免）
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -199,10 +216,25 @@ class ViolationController extends Controller
                     ->where('seat_audit_violations.audit_type', '=', 'contracts');
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
-            ->whereNull('wl_chr.id')
-            ->whereNull('wl_ctp.id')
-            ->whereNull('corp_wl_chr.id')
-            ->whereNull('corp_wl_ctp.id')
+            ->where(function ($q) {
+                $q->where(function ($qw) {
+                    $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
+                       ->whereNull('wl_chr.id');
+                })
+                ->orWhere(function ($qc) {
+                    $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
+                       ->where(function ($qcc) {
+                           $qcc->where(function ($qi) {
+                               $qi->whereNull('wl_chr.id')
+                                  ->whereNull('corp_wl_chr.id');
+                           })
+                           ->orWhere(function ($qa) {
+                               $qa->whereNull('wl_ctp.id')
+                                  ->whereNull('corp_wl_ctp.id');
+                           });
+                       });
+                });
+            })
             ->orderBy('seat_audit_violations.violation_time', 'desc')
             ->select([
                 'seat_audit_violations.character_name',

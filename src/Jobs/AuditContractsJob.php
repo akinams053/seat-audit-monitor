@@ -167,28 +167,23 @@ class AuditContractsJob implements ShouldQueue
                         $maxCompletedAt = $completedAt;
                     }
 
-                    // 过滤步骤①：三方角色白名单拦截。
-                    // 任意一方在白名单中，整份合同跳过，不再检查物品是否命中监控名单。
-                    if (
-                        isset($whitelistIds[$contract->issuer_id])
-                        || isset($whitelistIds[$contract->assignee_id])
-                        || isset($whitelistIds[$contract->acceptor_id])
-                    ) {
-                        continue;
-                    }
-
-                    // 过滤步骤①-2：军团白名单拦截（仅合同审计生效）。
-                    // - 发起方军团：直接从 contract.issuer_corporation_id 字段（合同自带）
-                    // - 接收方军团：从 character_affiliations 查 acceptor 当前所属军团
-                    // 任一军团在白名单中即跳过整份合同
+                    // 过滤步骤①：双方白名单拦截（AND 豁免语义）。
+                    // 单方「在白名单」定义：他个人在角色白名单 OR 他当前所属军团在军团白名单。
+                    // 只有 issuer 和 acceptor 都满足该条件，才跳过整份合同（豁免内部成员之间的合同）。
+                    // 任一方在白名单外（=对外部交易）即进入审计。assignee 在新语义下不参与判定：
+                    //  - 私下 item_exchange 合同中 assignee==acceptor，已被 acceptor 检查覆盖
+                    //  - 公开/corp/alliance 合同中 assignee 不是 character ID，角色白名单查不到
                     $acceptorCorp = $contract->acceptor_id
                         ? ($acceptorCorpMap[$contract->acceptor_id] ?? null)
                         : null;
 
-                    if (
-                        isset($corporationWhitelistIds[$contract->issuer_corporation_id])
-                        || ($acceptorCorp !== null && isset($corporationWhitelistIds[$acceptorCorp]))
-                    ) {
+                    $issuerWhitelisted = isset($whitelistIds[$contract->issuer_id])
+                        || isset($corporationWhitelistIds[$contract->issuer_corporation_id]);
+
+                    $acceptorWhitelisted = isset($whitelistIds[$contract->acceptor_id])
+                        || ($acceptorCorp !== null && isset($corporationWhitelistIds[$acceptorCorp]));
+
+                    if ($issuerWhitelisted && $acceptorWhitelisted) {
                         continue;
                     }
 
