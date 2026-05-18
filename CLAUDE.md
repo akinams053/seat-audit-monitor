@@ -19,6 +19,12 @@
     - 关键字段：`id`, `character_id`, `type_id`, `is_buy`, `unit_price`, `quantity`, `date`。
     - 其他字段：`transaction_id`, `location_id`, `client_id`, `is_personal`, `journal_ref_id`。
     - 判定条件：`is_buy === 0`（卖出）且 `type_id` 匹配监控名单。
+- **合同主表**：`contract_details`
+    - 关键字段：`contract_id` (PK), `issuer_id`, `assignee_id`, `acceptor_id`, `type`, `status`, `price`, `reward`, `date_completed`, `title`。
+    - 判定条件：`status='finished'` 且 `type IN ('item_exchange','auction')` 且 issuer/assignee/acceptor 均不在白名单。
+- **合同物品表**：`contract_items`
+    - 关键字段：`record_id` (PK), `contract_id` (FK), `type_id`, `quantity`, `is_included`。
+    - 注意：`character_contracts` 仅是 character↔contract 的关联映射，**不含合同业务字段**，不要查它取合同内容。
 - **角色信息表**：`character_infos`
     - 用于获取角色名：通过 `character_id` 查询 `name` 字段。
 - **SDE 物品表**：`invTypes`
@@ -28,21 +34,47 @@
 表前缀：`seat_audit_`
 - `seat_audit_monitor_items`：监控物品列表 (id, type_id, item_name)。
 - `seat_audit_whitelist`：豁免名单 (id, character_id, character_name)。
-- `seat_audit_status`：记录增量水位线 (id, audit_type, last_id)。
+- `seat_audit_status`：记录增量水位线 (id, audit_type, last_id, **last_completed_at**)。
+    - `last_id`：钱包交易审计用（按记录 id 推进）。
+    - `last_completed_at`：合同审计用（按 `date_completed` 推进，DATETIME NULL）。
 - **seat_audit_violations (违规记录表)**：
-    - 必须存储快照信息：`id`, `character_id`, `character_name`（角色名）, `type_id`, `item_name`（物品名）, `amount`（总金额 = 单价 × 数量）, `violation_time`（交易发生时间）, `details`（JSON 原始数据）, `created_at`。
+    - 必须存储快照信息：`id`, `character_id`, `character_name`（角色名）, `type_id`, `item_name`（物品名）, `amount`（金额）, `violation_time`（违规发生时间）, `details`（JSON 原始数据），`created_at`。
+    - **审计类型字段**：`audit_type` VARCHAR(50) NOT NULL DEFAULT `'wallet_transactions'`，可能值 `wallet_transactions` / `contracts`。
+    - **合同 ID 字段**：`contract_id` BIGINT UNSIGNED NULL（仅 `audit_type='contracts'` 时非空，便于按合同聚合追溯）。
 
 ## 4. 核心审计逻辑 (Audit Logic)
 
-### 4.1 增量扫描逻辑
+### 4.1 市场交易审计 (wallet_transactions)
 - **水位线**：通过 `seat_audit_status` 获取 `last_id`，仅查询 `id > last_id` 的记录。
 - **批处理**：使用 `chunk(500)` 处理，完成后更新 `last_id`。
 
-### 4.2 过滤与匹配流程
+过滤流程：
 1. **白名单拦截**：**首要步骤**。如果该记录的 `character_id` 存在于 `seat_audit_whitelist` 中，则直接跳过该角色的**所有**审计逻辑。
 2. **行为判定**：仅审计 `is_buy === 0`（角色卖出物品）的记录。
 3. **物品匹配**：检查 `type_id` 是否在 `seat_audit_monitor_items` 名单内。只要匹配，即判定为违规。
-4. **排除项**：**当前阶段不记录任何来自钱包日志 (character_wallet_journals) 的捐赠 (Donation) 记录**。
+
+### 4.2 合同审计 (contracts)
+- **水位线**：通过 `seat_audit_status` 获取 `last_completed_at`，仅查询 `date_completed > last_completed_at` 的合同；首次扫描以 `1970-01-01` 作为基线全量回扫。
+- **批处理**：`contract_details` 用 `chunk(500)`，在 chunk 内一次性 JOIN `contract_items` 拉本批所有命中监控 type_id 的物品行。
+
+过滤流程：
+1. **状态/类型筛选**：仅审 `status='finished'` 且 `type IN ('item_exchange','auction')`（跳过 courier/loan/unknown，避免物权未转移的误报）。
+2. **白名单三方拦截**：`issuer_id` / `assignee_id` / `acceptor_id` 任一在 `seat_audit_whitelist.character_id` 中即跳过整份合同。
+3. **物品匹配**：合同 items 中任一 `type_id` 命中监控名单即记违规。
+4. **违规粒度**：一个 `(contract_id, type_id)` 一条 violation。若同一合同含多种监控物品，落多条；同 type_id 多 record（如 is_singleton 装配舰船）则聚合 quantity 到 `details.item.quantity`。
+5. **快照字段映射**：
+    - `character_id` = `contract.issuer_id`（issuer 视为主要相关方；assignee/acceptor 完整保存在 `details.parties`）
+    - `amount` = `max(price, reward)`（item_exchange 卖出取 price，求购取 reward；零金额合同保留 amount=0，UI 标灰区分）
+    - `violation_time` = `contract.date_completed`
+    - `contract_id` = `contract.contract_id`
+    - `details.contract` 含 contract_id/type/status/issuer/assignee/acceptor/price/reward/date_*/title
+    - `details.item` 含 type_id/quantity/is_included/record_id/record_ids
+    - `details.parties` 含 issuer_name/assignee_name/acceptor_name
+
+### 4.3 排除项 (共用)
+- **当前阶段不记录任何来自钱包日志 (`character_wallet_journals`) 的捐赠/直接 trade 记录**。
+- 直接 trade（站内 trade 窗口）在 journal 有 entry 但无物品级明细（无 type_id），物理上无法审计——这是已知盲区。
+- 合同的 courier/loan 类型不审（物品所有权未转移）。
 
 ## 5. 插件开发规范 (SeAT 5.x Plugin)
 
@@ -111,8 +143,8 @@ scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
 ```
 
 ## 8. 扩展规划 (Roadmap)
-当前仅审计市场交易，架构已为以下扩展预留设计：
-- **合同审计**：未来可新增 `AuditContractsJob`，扫描 `character_contracts` / `character_contract_items` 表。
-- **水位线复用**：`seat_audit_status.audit_type` 字段支持多审计类型（当前仅 `wallet_transactions`）。
-- **违规分类**：扩展时需在 `seat_audit_violations` 表新增 `audit_type` 字段，用于区分违规来源（市场交易 / 合同等）。
-- **监控名单复用**：`seat_audit_monitor_items` 可跨审计类型共用。
+当前已支持市场交易审计 (wallet_transactions) 与合同审计 (contracts)。后续可考虑：
+- **公司/联盟白名单**：当前 `seat_audit_whitelist` 仅按 `character_id` 匹配；合同的 `assignee_id` 可能是 corp 或 alliance ID，公司间合同会绕过白名单。可扩展为多类型 ID 白名单。
+- **钱包日志 (Donation) 审计**：直接 ISK 转账（`ref_type='player_donation'`）目前不审，可作为新审计类型加入；技术上需要新的 `AuditDonationsJob` + `audit_type='donations'` 水位线。
+- **合同金额按 LP 价值核算**：当前 `amount = max(price, reward)`，零金额合同 amount=0。可引入 LP 价格表或 evepraisal 估值，把零金额合同的物品市场价合算进 amount。
+- **监控名单复用**：`seat_audit_monitor_items` 已跨审计类型共用，无需扩展。

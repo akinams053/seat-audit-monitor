@@ -1,22 +1,23 @@
 # seat-audit-monitor
 
-Eve SeAT 5.x 角色钱包交易审计监控插件
+Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 
 ## 项目简介
 
-`seat-audit-monitor` 是一款基于 Eve SeAT 5.x 插件系统的经济合规审计工具。通过增量扫描角色钱包交易记录，自动检测角色卖出受监控物品的行为，帮助联盟管理层进行经济监管。
+`seat-audit-monitor` 是一款基于 Eve SeAT 5.x 插件系统的经济合规审计工具。通过增量扫描角色钱包**市场交易**和**合同**记录，自动检测涉及监控物品的可疑行为，帮助联盟管理层进行经济监管。
 
 所有违规记录采用快照存储，不依赖原始数据，确保历史审计数据的完整性和可追溯性。
 
 ## 功能特性
 
-- **增量审计** — 基于水位线机制，每次仅处理新增交易，不重复扫描
+- **双审计源** — 同时审计角色钱包市场交易（卖出受监控物品）与合同（包含受监控物品且双方均不在白名单）
+- **增量审计** — 基于水位线机制（钱包按 id，合同按 date_completed），每次仅处理新增数据
 - **物品监控** — 自定义监控物品名单，输入 type_id 自动查询物品名称
-- **白名单豁免** — 指定角色跳过所有审计逻辑
-- **违规记录** — 自动记录角色名、物品名、交易金额等快照信息
-- **时间筛选** — 支持按日期区间筛选违规记录
-- **CSV 导出** — 一键导出违规记录，Excel/WPS 直接打开
-- **手动扫描** — Web 界面一键触发或通过 Artisan 命令行执行
+- **白名单豁免** — 指定角色跳过所有审计；合同审计对 issuer/assignee/acceptor 三方任一命中即跳过
+- **违规记录** — 自动记录角色名、物品名、金额、来源类型、合同 ID 等快照信息
+- **类型筛选** — 按审计类型（钱包/合同）+ 时间区间组合筛选；零金额合同 UI 灰底标识
+- **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
+- **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
 ## 环境要求
@@ -110,16 +111,25 @@ sudo -u www-data php artisan route:cache
 路径：侧边栏 **审计监控 > 违规记录**（需 view 权限）
 
 - 按违规时间倒序展示，每页 50 条
-- 支持开始日期 / 结束日期区间筛选
-- 点击 **导出 CSV (Excel)** 导出当前筛选结果
+- 支持按**审计类型**（全部 / 钱包交易 / 合同）+ 开始日期 / 结束日期组合筛选
+- 表格 "来源" 列用 badge 区分：钱包（蓝）/ 合同（橙）；合同行多显示 Contract ID
+- **零金额合同**整行用灰底标识，便于一眼区分"成交套现"与"零价物资划转"
+- 点击 **导出 CSV (Excel)** 导出当前筛选结果（含审计类型 + Contract ID 两列）
 
 ### 5. 触发审计扫描
 
-**Web 界面**：违规记录页右上角点击 **立即审查**（需 admin 权限）
+**Web 界面**：违规记录页右上角下拉选择审计类型（全部 / 仅钱包 / 仅合同），点击 **立即审查**（需 admin 权限）。
 
 **命令行**：
 ```bash
+# 默认全部审计
 sudo -u www-data php artisan seat:audit:scan
+
+# 仅审钱包交易
+sudo -u www-data php artisan seat:audit:scan --type=wallet
+
+# 仅审合同
+sudo -u www-data php artisan seat:audit:scan --type=contracts
 ```
 
 扫描基于水位线增量执行，重复运行不会产生重复记录。
@@ -130,19 +140,24 @@ sudo -u www-data php artisan seat:audit:scan
 
 ```php
 use Seat\SeatAuditMonitor\Jobs\AuditWalletTransactionsJob;
+use Seat\SeatAuditMonitor\Jobs\AuditContractsJob;
 
 protected function schedule(Schedule $schedule)
 {
     $schedule->job(new AuditWalletTransactionsJob)->hourly();
+    // 合同扫描相对低频，每 6 小时一次即可
+    $schedule->job(new AuditContractsJob)->cron('0 */6 * * *');
 }
 ```
 
 ## 管理要点
 
-- **水位线机制**：扫描进度记录在 `seat_audit_status` 表中，确保每条交易只处理一次
-- **快照存储**：违规记录保存角色名和物品名的快照副本，不受原始数据变更影响
-- **批量处理**：每次以 500 条为一批处理，白名单和监控名单预加载至内存，避免性能问题
-- **审计优先级**：白名单拦截 > 行为判定（仅卖出）> 物品匹配
+- **水位线机制**：扫描进度记录在 `seat_audit_status` 表中（钱包按 `last_id` 推进，合同按 `last_completed_at` 推进），确保每条记录只处理一次
+- **快照存储**：违规记录保存角色名和物品名的快照副本，不受原始数据变更影响；合同审计还快照 issuer/assignee/acceptor 三方信息到 `details.parties`
+- **批量处理**：每次以 500 条为一批处理，白名单 / 监控名单 / 角色名映射预加载至内存，避免 N+1 查询
+- **审计优先级**：
+    - 钱包：白名单拦截 > 仅卖出（is_buy=0）> 物品匹配
+    - 合同：仅 finished + item_exchange/auction > 白名单三方拦截（issuer/assignee/acceptor 任一命中即跳过）> 物品匹配
 - **数据安全**：删除监控物品或移除白名单角色，均不会影响已有的违规记录
 
 ## 卸载
