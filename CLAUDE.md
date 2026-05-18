@@ -169,10 +169,10 @@ scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
 ```
 
 ## 8. 扩展规划 (Roadmap)
-当前已支持市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 + 军团白名单。后续可考虑：
+当前已支持：市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免、外部角色名 ESI 批量解析（`ResolveUnknownNamesJob` / `seat:audit:resolve-unknown-names` / UI 按钮）。后续可考虑：
 - **联盟白名单**：当前已支持角色 + 军团两级白名单。合同的 `assignee_id` 可能是 alliance ID，跨联盟合同仍可能绕过。可扩展为三级白名单或统一 entity_type 模型。
 - **assignee 字段成列**：当前 `assignee_id` 仅在 `details` JSON 内，软过滤无法覆盖"白名单事后新增 assignee-only 角色"的边角场景。可考虑在 violations 表加 `assignee_id` 快照列。
-- **外部 character_id 名字解析**：未授权过 SeAT 的外部角色（如 DeneX 案例 ID=2120882761）在 violations 显示 "Unknown (ID: ...)"。可在 UI 加按钮通过 ESI `/universe/names` 实时解析，或后台 job 批量回填。注意：当前 SeAT 实例**没有** `character_names` 表，需调研 5.x 版本下解析结果实际存放位置。
 - **钱包日志 (Donation) 审计**：直接 ISK 转账（`ref_type='player_donation'`）目前不审，可作为新审计类型加入；技术上需要新的 `AuditDonationsJob` + `audit_type='donations'` 水位线。
 - **合同金额按 LP 价值核算**：当前 `amount = max(price, reward)`，零金额合同 amount=0。可引入 LP 价格表或 evepraisal 估值，把零金额合同的物品市场价合算进 amount。
+- **ESI 解析定时化**：当前需手动触发。可加到 SeAT schedule 中每日自动跑。
 - **监控名单复用**：`seat_audit_monitor_items` 已跨审计类型共用，无需扩展。

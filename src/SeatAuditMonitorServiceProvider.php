@@ -7,6 +7,7 @@ namespace Seat\SeatAuditMonitor;
 
 use Seat\Services\AbstractSeatPlugin;
 use Seat\SeatAuditMonitor\Console\Commands\AuditScanCommand;
+use Seat\SeatAuditMonitor\Console\Commands\ResolveUnknownNamesCommand;
 
 class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
 {
@@ -39,9 +40,12 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
             'package.sidebar'
         );
 
-        // 注册 Artisan 命令，用于手动触发审计扫描
+        // 注册 Artisan 命令
+        // - AuditScanCommand 手动触发审计扫描
+        // - ResolveUnknownNamesCommand 调 ESI 批量解析外部角色名
         $this->commands([
             AuditScanCommand::class,
+            ResolveUnknownNamesCommand::class,
         ]);
     }
 

@@ -21,6 +21,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **类型筛选** — 按审计类型（钱包/合同）+ 时间区间组合筛选；零金额合同 UI 灰底标识
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
 - **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
+- **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口 `/universe/names/` 批量解析并回填，或 Artisan `seat:audit:resolve-unknown-names`
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
 ## 环境要求
@@ -249,6 +250,22 @@ sudo -u www-data php artisan seat:audit:scan --type=contracts
 ```
 
 扫描基于水位线增量执行，重复运行不会产生重复记录。
+
+### 5.5 解析外部角色名（Unknown ID）
+
+违规记录里会出现 `Unknown (ID: 2120882761)` 这类条目——这是未在你 SeAT 实例授权过 ESI 的外部玩家，SeAT 本地没有他们的名字。
+
+**触发方式**（任一即可，admin 权限）：
+
+- Web 界面：违规记录页右上角 **解析未知名字** 按钮。任务异步入 Horizon 队列，几秒~几十秒后刷新页面可见结果。
+- 命令行：`sudo -u www-data php artisan seat:audit:resolve-unknown-names`（同步执行）。
+
+**工作原理**：扫描 `seat_audit_violations` 表所有 character_name/counterparty_name 仍是 "Unknown (ID:%)" 的行，去重收集 character_id，按 1000 一批 POST 到 ESI 公开接口 `/universe/names/`（无需 token），仅取 `category=character` 的结果回写。
+
+**注意**：
+- ESI 整批包含已注销/无效 ID 时该批可能返回 4xx，本插件按设计跳过失败批次，下次重跑会再试
+- 详细进度看 `storage/logs/laravel.log` 中 `[seat-audit:resolve-unknown]` 前缀
+- 已解析过的名字下次不会重复请求（WHERE 子句限定 LIKE 'Unknown%'）
 
 ### 6. 配置定时自动扫描（可选）
 

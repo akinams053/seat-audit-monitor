@@ -22,6 +22,10 @@ Route::group([
     Route::post('/violations/scan', 'ViolationController@scan')
         ->name('seat-audit.violations.scan');
 
+    // 调 ESI 批量解析未知角色名（异步入队列）
+    Route::post('/violations/resolve-unknown', 'ViolationController@resolveUnknown')
+        ->name('seat-audit.violations.resolve-unknown');
+
     // 导出违规记录为 CSV（支持时间区间筛选）
     Route::get('/violations/export', 'ViolationController@export')
         ->name('seat-audit.violations.export');

@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Gate;
 use Seat\SeatAuditMonitor\Jobs\AuditContractsJob;
 use Seat\SeatAuditMonitor\Jobs\AuditWalletTransactionsJob;
+use Seat\SeatAuditMonitor\Jobs\ResolveUnknownNamesJob;
 
 class ViolationController extends Controller
 {
@@ -166,6 +167,24 @@ class ViolationController extends Controller
 
         return redirect()->route('seat-audit.violations.index')
             ->with('success', $message);
+    }
+
+    /**
+     * 触发批量 ESI 外部角色名解析（异步入队列）
+     * 需要 seat-audit-monitor.admin 权限
+     */
+    public function resolveUnknown()
+    {
+        if (Gate::denies('seat-audit-monitor.admin')) {
+            abort(403, '您没有权限执行名字解析任务。');
+        }
+
+        // 进队列异步跑——SeAT 用 Horizon 调度，UI 立即返回避免 PHP-FPM 超时
+        // 解析结果几秒~几十秒后可见，用户刷新列表查看
+        dispatch(new ResolveUnknownNamesJob());
+
+        return redirect()->route('seat-audit.violations.index')
+            ->with('success', '名字解析任务已加入队列。数秒后刷新本页可见结果（具体进度见 laravel.log 中 [seat-audit:resolve-unknown] 前缀）。');
     }
 
     /**

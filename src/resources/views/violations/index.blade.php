@@ -137,6 +137,14 @@
                             <i class="fas fa-search"></i> 立即审查
                         </button>
                     </form>
+                    {{-- 解析未知外部角色名（异步入队列，调 ESI 公开接口 /universe/names/ 批量回填） --}}
+                    <form method="POST" action="{{ route('seat-audit.violations.resolve-unknown') }}" class="form-inline d-inline ml-1">
+                        @csrf
+                        <button type="submit" class="btn btn-sm btn-info"
+                                title="批量调 ESI 公开接口解析「Unknown (ID: X)」类型的外部角色名，结果数秒后可见">
+                            <i class="fas fa-sync"></i> 解析未知名字
+                        </button>
+                    </form>
                     <a href="{{ route('seat-audit.admin.items') }}" class="btn btn-sm btn-primary ml-1">
                         <i class="fas fa-cog"></i> 管理监控名单
                     </a>
