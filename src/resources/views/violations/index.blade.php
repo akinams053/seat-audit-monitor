@@ -98,7 +98,13 @@
 
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">违规交易记录</h3>
+                {{-- 标题旁附软过滤提示：白名单更新后历史记录自动按当前白名单实时排除 --}}
+                <h3 class="card-title">
+                    违规交易记录
+                    <small class="text-muted ml-2" title="白名单更新后已对历史记录实时过滤：发起方或接收方任一在白名单中则不显示">
+                        <i class="fas fa-user-shield"></i> 白名单实时过滤
+                    </small>
+                </h3>
                 <div class="card-tools">
                     @can('seat-audit-monitor.admin')
                     {{-- 立即审查表单，POST body 包含审计类型，仅管理员可见 --}}
@@ -137,7 +143,8 @@
                 <table class="table table-striped table-hover mb-0">
                     <thead>
                         <tr>
-                            <th>角色名</th>
+                            <th>发起方</th>
+                            <th>接收方</th>
                             <th>物品名称</th>
                             <th>交易金额 (ISK)</th>
                             <th>来源</th>
@@ -149,6 +156,14 @@
                         @foreach($violations as $v)
                         <tr class="{{ $v->audit_type === 'contracts' && (float) $v->amount === 0.0 ? 'table-secondary' : '' }}">
                             <td>{{ $v->character_name }}</td>
+                            <td>
+                                {{-- 接收方语义：钱包审计固定为「市场」，合同审计为 acceptor 角色名快照 --}}
+                                @if($v->audit_type === 'wallet_transactions')
+                                    <span class="badge badge-secondary">市场</span>
+                                @else
+                                    {{ $v->counterparty_name ?? '-' }}
+                                @endif
+                            </td>
                             <td>{{ $v->item_name }}</td>
                             <td>
                                 {{ number_format($v->amount, 2) }}

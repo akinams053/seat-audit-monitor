@@ -13,8 +13,8 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **双审计源** — 同时审计角色钱包市场交易（卖出受监控物品）与合同（包含受监控物品且双方均不在白名单）
 - **增量审计** — 基于水位线机制（钱包按 id，合同按 date_completed），每次仅处理新增数据
 - **物品监控** — 自定义监控物品名单，输入 type_id 自动查询物品名称
-- **白名单豁免** — 指定角色跳过所有审计；合同审计对 issuer/assignee/acceptor 三方任一命中即跳过
-- **违规记录** — 自动记录角色名、物品名、金额、来源类型、合同 ID 等快照信息
+- **白名单豁免** — 指定角色跳过所有审计；合同审计对 issuer/assignee/acceptor 三方任一命中即跳过；**白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
+- **违规记录** — 自动记录发起方/接收方、物品名、金额、来源类型、合同 ID 等快照信息
 - **类型筛选** — 按审计类型（钱包/合同）+ 时间区间组合筛选；零金额合同 UI 灰底标识
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
 - **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
@@ -82,8 +82,11 @@ sudo -u www-data php artisan route:cache
 
 ## 升级
 
-> 适用场景：已经装了旧版本（仅市场交易审计），现在要升级到带合同审计的版本。
-> 本次升级**无破坏性变更**，2 个新 migration 都是加字段，可回滚。
+> 适用场景：已经装了旧版本（仅市场交易审计或不含「接收方」列的合同审计版本），现在要升级到当前版本。
+> 本次升级**无破坏性变更**：
+> - 合同审计扩展：2 个 migration 加 `audit_type` / `contract_id` 字段
+> - 接收方扩展：2 个 migration 加 `counterparty_id` / `counterparty_name` 字段 + 回填历史数据
+> 所有新增字段均可回滚。
 
 ```bash
 cd /var/www/seat
@@ -109,13 +112,14 @@ sudo -u www-data php artisan view:clear
 ### 升级验证
 
 1. 侧边栏点击 **违规记录**，确认筛选区出现 **审计类型** 下拉
-2. 表格出现 **来源** 列与 **Contract ID** 列；历史 wallet 数据应自动归类为"钱包"
-3. **首次合同回扫推荐用命令行**（避免 Web 同步按钮被 nginx/php-fpm 60s 超时切断）：
+2. 表格出现 **发起方** / **接收方** / **来源** / **Contract ID** 列；钱包行接收方显示「市场」badge，合同行接收方显示 acceptor 角色名
+3. 卡片标题旁有 **白名单实时过滤** 提示图标——白名单更新后违规列表自动按当前白名单排除（发起方或接收方任一命中即隐藏）
+4. **首次合同回扫推荐用命令行**（避免 Web 同步按钮被 nginx/php-fpm 60s 超时切断）：
    ```bash
    sudo -u www-data php artisan seat:audit:scan --type=contracts
    ```
    插件 migration 已预置基线 `2026-01-01`，**2026 年以前的合同完全跳过**。首次回扫的实际范围取决于 2026 年起的 finished 合同体量，索引就绪后通常 10–30 秒内完成。
-4. 检查水位线已推进：
+5. 检查水位线已推进：
    ```bash
    sudo mariadb seat -e "SELECT audit_type, last_id, last_completed_at FROM seat_audit_status;"
    ```
@@ -147,8 +151,11 @@ UPDATE seat_audit_status SET last_completed_at = '2025-01-01 00:00:00' WHERE aud
 # 0.（可选）若希望回滚后违规列表干净不出现已扫到的合同记录，先手动清理合同来源行：
 sudo mariadb seat -e "DELETE FROM seat_audit_violations WHERE audit_type='contracts';"
 
-# 1. 回滚本次新增的两个 migration（按文件 path 限定，不影响其它模块）
-sudo -u www-data php artisan migrate:rollback --step=2 \
+# 1. 回滚本次新增的 migration（按文件 path 限定，不影响其它模块）
+# --step 数量按本次实际跑了几个 migration 来定：
+#   - 仅合同审计版（4 个）：--step=4
+#   - 含接收方扩展版（6 个）：--step=6
+sudo -u www-data php artisan migrate:rollback --step=6 \
   --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 
 # 2. 切回旧版本（指定具体 commit 更稳）
@@ -160,8 +167,9 @@ sudo -u www-data php artisan config:clear
 ```
 
 回滚行为说明：
-- migration down 仅删除 `audit_type` / `contract_id` / `last_completed_at` 三个字段及索引，**不删表行**
-- 若跳过步骤 0：合同来源的 violation 行仍在 `seat_audit_violations` 表里，旧版 UI 会把它们当 wallet violation 显示（character_name/item_name/amount 都能正常出现，但来源信息丢失，且 contract_id 列没了）
+- migration down 仅删除 `audit_type` / `contract_id` / `counterparty_id` / `counterparty_name` / `last_completed_at` 等字段及索引，**不删表行**
+- counterparty 回填 migration 的 down 是 no-op（不主动清空回填的数据，靠 dropColumn 整列带走）
+- 若跳过步骤 0：合同来源的 violation 行仍在 `seat_audit_violations` 表里，旧版 UI 会把它们当 wallet violation 显示（character_name/item_name/amount 都能正常出现，但来源信息丢失，且 contract_id / counterparty 列没了）
 - Wallet 历史记录 100% 不受影响
 
 ## 使用说明
@@ -240,11 +248,13 @@ protected function schedule(Schedule $schedule)
 ## 管理要点
 
 - **水位线机制**：扫描进度记录在 `seat_audit_status` 表中（钱包按 `last_id` 推进，合同按 `last_completed_at` 推进），确保每条记录只处理一次
-- **快照存储**：违规记录保存角色名和物品名的快照副本，不受原始数据变更影响；合同审计还快照 issuer/assignee/acceptor 三方信息到 `details.parties`
+- **快照存储**：违规记录保存发起方/接收方角色名、物品名的快照副本，不受原始数据变更影响；合同审计还快照 issuer/assignee/acceptor 三方信息到 `details.parties`
+- **接收方语义**：钱包审计 `counterparty_name='市场'`（对手方是市场撮合系统）；合同审计 `counterparty_name=acceptor 角色名`
 - **批量处理**：每次以 500 条为一批处理，白名单 / 监控名单 / 角色名映射预加载至内存，避免 N+1 查询
 - **审计优先级**：
     - 钱包：白名单拦截 > 仅卖出（is_buy=0）> 物品匹配
     - 合同：仅 finished + item_exchange/auction > 白名单三方拦截（issuer/assignee/acceptor 任一命中即跳过）> 物品匹配
+- **白名单实时过滤**：违规列表/导出查询时会 LEFT JOIN 白名单，发起方或接收方任一命中当前白名单则不展示（DB 历史数据不变；白名单加/减都即时生效、可逆）
 - **数据安全**：删除监控物品或移除白名单角色，均不会影响已有的违规记录
 
 ## 卸载

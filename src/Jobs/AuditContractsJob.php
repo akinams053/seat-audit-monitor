@@ -180,6 +180,10 @@ class AuditContractsJob implements ShouldQueue
                         $violations[] = [
                             'character_id'   => $contract->issuer_id,
                             'character_name' => $issuerName,
+                            // 接收方快照：合同 finished 时 acceptor 必为 character ID，对应 character_infos.name 取出的名字
+                            // 与 character_id 一起用于查询层白名单软过滤（任一在白名单中则 UI 实时排除）
+                            'counterparty_id'   => $contract->acceptor_id,
+                            'counterparty_name' => $acceptorName,
                             'type_id'        => $item->type_id,
                             'item_name'      => $monitoredTypeIds[$item->type_id],
                             'amount'         => $amount,

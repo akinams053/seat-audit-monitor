@@ -107,6 +107,10 @@ class AuditWalletTransactionsJob implements ShouldQueue
                         'character_name' => isset($characterNames[$record->character_id])
                             ? $characterNames[$record->character_id]
                             : 'Unknown (ID: ' . $record->character_id . ')',
+                        // 接收方快照：钱包交易的对手方是市场撮合系统，无 character ID
+                        // counterparty_id 保持 NULL，与 character_id 一起 JOIN 白名单时不会误命中
+                        'counterparty_id'   => null,
+                        'counterparty_name' => '市场',
                         'type_id'        => $record->type_id,
                         // 物品名快照：从预加载的监控物品映射中读取
                         'item_name'      => $monitoredItems[$record->type_id],

@@ -38,15 +38,17 @@
     - `last_id`：钱包交易审计用（按记录 id 推进）。
     - `last_completed_at`：合同审计用（按 `date_completed` 推进，DATETIME NULL）。
 - **seat_audit_violations (违规记录表)**：
-    - 必须存储快照信息：`id`, `character_id`, `character_name`（角色名）, `type_id`, `item_name`（物品名）, `amount`（金额）, `violation_time`（违规发生时间）, `details`（JSON 原始数据），`created_at`。
+    - 必须存储快照信息：`id`, `character_id`, `character_name`（**发起方**角色名快照）, `type_id`, `item_name`（物品名）, `amount`（金额）, `violation_time`（违规发生时间）, `details`（JSON 原始数据），`created_at`。
     - **审计类型字段**：`audit_type` VARCHAR(50) NOT NULL DEFAULT `'wallet_transactions'`，可能值 `wallet_transactions` / `contracts`。
     - **合同 ID 字段**：`contract_id` BIGINT UNSIGNED NULL（仅 `audit_type='contracts'` 时非空，便于按合同聚合追溯）。
+    - **接收方快照字段**：`counterparty_id` BIGINT UNSIGNED NULL + `counterparty_name` VARCHAR NULL。合同：`counterparty_id=acceptor_id`、`counterparty_name=acceptor 名`；钱包：`counterparty_id=NULL`、`counterparty_name='市场'`。`counterparty_id` 加独立索引，用于和 `character_id` 一起 LEFT JOIN `seat_audit_whitelist` 做查询层软过滤。
 
 ## 4. 核心审计逻辑 (Audit Logic)
 
 ### 4.1 市场交易审计 (wallet_transactions)
 - **水位线**：通过 `seat_audit_status` 获取 `last_id`，仅查询 `id > last_id` 的记录。
 - **批处理**：使用 `chunk(500)` 处理，完成后更新 `last_id`。
+- **接收方快照**：`counterparty_id=NULL`、`counterparty_name='市场'`（钱包交易的对手方是市场撮合系统，无 character ID）。
 
 过滤流程：
 1. **白名单拦截**：**首要步骤**。如果该记录的 `character_id` 存在于 `seat_audit_whitelist` 中，则直接跳过该角色的**所有**审计逻辑。
@@ -66,7 +68,8 @@
 3. **物品匹配**：合同 items 中任一 `type_id` 命中监控名单即记违规。
 4. **违规粒度**：一个 `(contract_id, type_id)` 一条 violation。若同一合同含多种监控物品，落多条；同 type_id 多 record（如 is_singleton 装配舰船）则聚合 quantity 到 `details.item.quantity`。
 5. **快照字段映射**：
-    - `character_id` = `contract.issuer_id`（issuer 视为主要相关方；assignee/acceptor 完整保存在 `details.parties`）
+    - `character_id` = `contract.issuer_id`（issuer = **发起方**主要相关方；assignee/acceptor 完整保存在 `details.parties`）
+    - `counterparty_id` = `contract.acceptor_id`、`counterparty_name` = acceptor 角色名（finished 合同 acceptor 必为 character）
     - `amount` = `max(price, reward)`（item_exchange 卖出取 price，求购取 reward；零金额合同保留 amount=0，UI 标灰区分）
     - `violation_time` = `contract.date_completed`
     - `contract_id` = `contract.contract_id`
@@ -78,6 +81,12 @@
 - **当前阶段不记录任何来自钱包日志 (`character_wallet_journals`) 的捐赠/直接 trade 记录**。
 - 直接 trade（站内 trade 窗口）在 journal 有 entry 但无物品级明细（无 type_id），物理上无法审计——这是已知盲区。
 - 合同的 courier/loan 类型不审（物品所有权未转移）。
+
+### 4.4 白名单查询层软过滤
+- **生效位置**：仅在 `ViolationController::index` / `::export` 查询时（即 UI 列表和 CSV 导出），不影响 Job 的扫描入库逻辑。
+- **JOIN 语义**：违规表 LEFT JOIN `seat_audit_whitelist` 两次——`character_id`（发起方）和 `counterparty_id`（接收方）任一命中即从结果集中排除。
+- **设计取舍**：白名单更新即时生效、可逆、DB 数据不动。代价是查询多两次 JOIN（`counterparty_id` 已加独立索引）。
+- **已知盲区**：`assignee_id` 不单独成列，仅在 `details` JSON 内。Job 扫描时已对 issuer/assignee/acceptor 三方拦截，但若白名单**事后**新增的角色仅作为 assignee 出现（不是 issuer/acceptor），软过滤不会命中该历史记录。属边角案例。
 
 ## 5. 插件开发规范 (SeAT 5.x Plugin)
 

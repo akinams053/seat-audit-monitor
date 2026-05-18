@@ -36,23 +36,31 @@ class ViolationController extends Controller
             $auditType = 'all';
         }
 
-        // 构建基础查询，支持按时间区间过滤
+        // 构建基础查询：两次 LEFT JOIN seat_audit_whitelist 实现白名单软过滤
+        // - wl_chr 匹配发起方（character_id），wl_ctp 匹配接收方（counterparty_id，仅合同行有值）
+        // - 任一方命中白名单则该 violation 不在列表展示
+        // - 软过滤意味着白名单事后加/减都即时生效，DB 历史数据不变
         $query = DB::table('seat_audit_violations')
-            ->orderBy('violation_time', 'desc');
+            ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
+            ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+            ->whereNull('wl_chr.id')
+            ->whereNull('wl_ctp.id')
+            ->select('seat_audit_violations.*')
+            ->orderBy('seat_audit_violations.violation_time', 'desc');
 
         // 应用审计类型筛选
         if ($auditType !== 'all') {
-            $query->where('audit_type', $auditType);
+            $query->where('seat_audit_violations.audit_type', $auditType);
         }
 
         // 应用起始时间筛选（violation_time >= start_date 00:00:00）
         if ($startDate) {
-            $query->where('violation_time', '>=', $startDate . ' 00:00:00');
+            $query->where('seat_audit_violations.violation_time', '>=', $startDate . ' 00:00:00');
         }
 
         // 应用截止时间筛选（violation_time <= end_date 23:59:59）
         if ($endDate) {
-            $query->where('violation_time', '<=', $endDate . ' 23:59:59');
+            $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
         // 分页展示，每页 50 条，保留筛选参数以便翻页时不丢失条件
@@ -139,32 +147,38 @@ class ViolationController extends Controller
         }
 
         // 构建查询（不分页，导出全部匹配记录）
+        // 与 index() 保持一致的白名单软过滤口径：LEFT JOIN 排除 character_id 或 counterparty_id 在白名单的行
         $query = DB::table('seat_audit_violations')
-            ->orderBy('violation_time', 'desc')
+            ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
+            ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
+            ->whereNull('wl_chr.id')
+            ->whereNull('wl_ctp.id')
+            ->orderBy('seat_audit_violations.violation_time', 'desc')
             ->select([
-                'character_name',
-                'item_name',
-                'amount',
-                'violation_time',
-                'type_id',
-                'character_id',
-                'audit_type',
-                'contract_id',
+                'seat_audit_violations.character_name',
+                'seat_audit_violations.counterparty_name',
+                'seat_audit_violations.item_name',
+                'seat_audit_violations.amount',
+                'seat_audit_violations.violation_time',
+                'seat_audit_violations.type_id',
+                'seat_audit_violations.character_id',
+                'seat_audit_violations.audit_type',
+                'seat_audit_violations.contract_id',
             ]);
 
         // 应用审计类型筛选
         if ($auditType !== 'all') {
-            $query->where('audit_type', $auditType);
+            $query->where('seat_audit_violations.audit_type', $auditType);
         }
 
         // 应用起始时间筛选
         if ($startDate) {
-            $query->where('violation_time', '>=', $startDate . ' 00:00:00');
+            $query->where('seat_audit_violations.violation_time', '>=', $startDate . ' 00:00:00');
         }
 
         // 应用截止时间筛选
         if ($endDate) {
-            $query->where('violation_time', '<=', $endDate . ' 23:59:59');
+            $query->where('seat_audit_violations.violation_time', '<=', $endDate . ' 23:59:59');
         }
 
         $records = $query->get();
@@ -191,9 +205,10 @@ class ViolationController extends Controller
             // 写入 UTF-8 BOM，确保 Excel 正确识别中文编码
             fwrite($handle, "\xEF\xBB\xBF");
 
-            // 写入 CSV 表头
+            // 写入 CSV 表头：原「角色名」列拆分为「发起方」+「接收方」，方便审计核对交易双方
             fputcsv($handle, [
-                '角色名',
+                '发起方',
+                '接收方',
                 '物品名称',
                 '交易金额 (ISK)',
                 '发生时间',
@@ -211,8 +226,13 @@ class ViolationController extends Controller
                     'contracts'           => '合同',
                 ][$row->audit_type] ?? $row->audit_type;
 
+                // 接收方：合同行用快照中的 acceptor 名字；钱包行旧记录可能为 NULL，统一兜底为「市场」
+                $counterpartyName = $row->counterparty_name
+                    ?? ($row->audit_type === 'wallet_transactions' ? '市场' : '');
+
                 fputcsv($handle, [
                     $row->character_name,
+                    $counterpartyName,
                     $row->item_name,
                     number_format($row->amount, 2, '.', ''),  // 纯数字格式，便于 Excel 计算
                     $row->violation_time,
