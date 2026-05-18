@@ -176,6 +176,23 @@
                     </thead>
                     <tbody>
                         @foreach($violations as $v)
+                        @php
+                            // 预先组装合同详情 modal 的 data payload，避免在 attribute 里跨行写 @json
+                            // 仅合同行使用；钱包行不会读到
+                            $contractModalPayload = $v->audit_type === 'contracts' ? [
+                                'details'               => $v->details,
+                                'amount'                => $v->amount,
+                                'violation_time'        => $v->violation_time,
+                                'item_name'             => $v->item_name,
+                                'type_id'               => $v->type_id,
+                                'contract_id'           => $v->contract_id,
+                                'contract_availability' => $v->contract_availability,
+                                'issuer_corp_name'      => $v->issuer_corp_name,
+                                'issuer_corp_ticker'    => $v->issuer_corp_ticker,
+                                'acceptor_corp_name'    => $v->acceptor_corp_name,
+                                'acceptor_corp_ticker'  => $v->acceptor_corp_ticker,
+                            ] : null;
+                        @endphp
                         <tr class="{{ $v->audit_type === 'contracts' && (float) $v->amount === 0.0 ? 'table-secondary' : '' }}">
                             {{-- 发起方角色名 --}}
                             <td>{{ $v->character_name }}</td>
@@ -244,19 +261,7 @@
                                             class="btn btn-link btn-sm p-0 contract-detail-btn"
                                             data-toggle="modal"
                                             data-target="#contractDetailModal"
-                                            data-violation='@json([
-                                                "details" => $v->details,
-                                                "amount" => $v->amount,
-                                                "violation_time" => $v->violation_time,
-                                                "item_name" => $v->item_name,
-                                                "type_id" => $v->type_id,
-                                                "contract_id" => $v->contract_id,
-                                                "contract_availability" => $v->contract_availability,
-                                                "issuer_corp_name" => $v->issuer_corp_name,
-                                                "issuer_corp_ticker" => $v->issuer_corp_ticker,
-                                                "acceptor_corp_name" => $v->acceptor_corp_name,
-                                                "acceptor_corp_ticker" => $v->acceptor_corp_ticker,
-                                            ])'
+                                            data-violation='@json($contractModalPayload)'
                                             title="点击查看合同详情">
                                         <code>{{ $v->contract_id }}</code>
                                     </button>
