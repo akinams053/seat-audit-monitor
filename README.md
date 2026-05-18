@@ -37,16 +37,19 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 ```bash
 cd /var/www/seat
 
-# 安装插件
-sudo -u www-data composer require akinams053/seat-audit-monitor
+# 安装稳定分支（main，含合同审计）
+sudo -u www-data composer require akinams053/seat-audit-monitor:dev-main
 
-# 执行数据库迁移
+# 执行数据库迁移（首次安装会建 4 张基础表 + 2 张合同审计扩展表）
 sudo -u www-data php artisan migrate
 
 # 刷新缓存
 sudo -u www-data php artisan config:cache
 sudo -u www-data php artisan route:cache
 ```
+
+> 想试用尚未合入 main 的功能分支，把上面 `dev-main` 换成对应分支约束，例如：
+> `composer require akinams053/seat-audit-monitor:dev-feature/contract-audit`
 
 ### 本地路径安装（开发调试）
 
@@ -76,6 +79,70 @@ sudo -u www-data php artisan route:cache
 > ```bash
 > sudo -u www-data php artisan config:clear && php artisan route:clear && php artisan view:clear && php artisan cache:clear
 > ```
+
+## 升级
+
+> 适用场景：已经装了旧版本（仅市场交易审计），现在要升级到带合同审计的版本。
+> 本次升级**无破坏性变更**，2 个新 migration 都是加字段，可回滚。
+
+```bash
+cd /var/www/seat
+
+# 1. 拉新版本（main，或某个功能分支例如 dev-feature/contract-audit）
+sudo -u www-data composer require akinams053/seat-audit-monitor:dev-main
+# 或：sudo -u www-data composer require akinams053/seat-audit-monitor:dev-feature/contract-audit
+
+# 2. 预览将要执行的 SQL（强烈建议先 dry-run 看一眼）
+sudo -u www-data php artisan migrate --pretend \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
+
+# 3. 真正执行迁移（仅本插件路径，避免影响其它模块）
+sudo -u www-data php artisan migrate \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
+
+# 4. 清缓存
+sudo -u www-data php artisan config:clear && \
+sudo -u www-data php artisan route:clear && \
+sudo -u www-data php artisan view:clear
+```
+
+### 升级验证
+
+1. 侧边栏点击 **违规记录**，确认筛选区出现 **审计类型** 下拉
+2. 表格出现 **来源** 列与 **Contract ID** 列；历史 wallet 数据应自动归类为"钱包"
+3. 命令行试跑合同审计：
+   ```bash
+   sudo -u www-data php artisan seat:audit:scan --type=contracts
+   ```
+   首次运行会按 `1970-01-01` 基线全量回扫已完成合同，根据合同体量耗时几秒到几分钟
+4. 检查水位线已推进：
+   ```bash
+   sudo mariadb seat -e "SELECT audit_type, last_id, last_completed_at FROM seat_audit_status;"
+   ```
+   应看到 `contracts` 行的 `last_completed_at` 不再为 NULL
+
+### 升级回滚（不满意可退回）
+
+```bash
+# 0.（可选）若希望回滚后违规列表干净不出现已扫到的合同记录，先手动清理合同来源行：
+sudo mariadb seat -e "DELETE FROM seat_audit_violations WHERE audit_type='contracts';"
+
+# 1. 回滚本次新增的两个 migration（按文件 path 限定，不影响其它模块）
+sudo -u www-data php artisan migrate:rollback --step=2 \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
+
+# 2. 切回旧版本（指定具体 commit 更稳）
+sudo -u www-data composer require akinams053/seat-audit-monitor:dev-main#0f878da \
+  --update-with-dependencies
+
+# 3. 清缓存
+sudo -u www-data php artisan config:clear
+```
+
+回滚行为说明：
+- migration down 仅删除 `audit_type` / `contract_id` / `last_completed_at` 三个字段及索引，**不删表行**
+- 若跳过步骤 0：合同来源的 violation 行仍在 `seat_audit_violations` 表里，旧版 UI 会把它们当 wallet violation 显示（character_name/item_name/amount 都能正常出现，但来源信息丢失，且 contract_id 列没了）
+- Wallet 历史记录 100% 不受影响
 
 ## 使用说明
 
