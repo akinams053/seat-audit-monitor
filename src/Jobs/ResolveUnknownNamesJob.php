@@ -188,8 +188,20 @@ class ResolveUnknownNamesJob implements ShouldQueue
 
         $allCorpIds = array_values(array_unique($allCorpIds));
 
+        // ============ 步骤 4.5：补全 — 收集所有合同涉及角色的 corp_id（即使 affiliation 早已存在） ============
+        // 修复 bug：SeAT 自身可能早就同步过外部角色的 affiliation（如 cgwang SkyCity 在 2026-02 同步过），
+        // 此时步骤 4 跳过这些角色 → 他们所属的外部 corp_id 不进 $allCorpIds → 步骤 5 不会去解析这些 corp 的名字。
+        // 这里直接从 character_affiliations 拉本批所有合同参与者的当前 corp_id 补回来。
+        if (!empty($contractParticipantIds)) {
+            $allExistingCorpIds = DB::table('character_affiliations')
+                ->whereIn('character_id', $contractParticipantIds)
+                ->pluck('corporation_id')
+                ->toArray();
+            $allCorpIds = array_values(array_unique(array_merge($allCorpIds, $allExistingCorpIds)));
+        }
+
         // ============ 步骤 5：批量解析军团/联盟名字（POST /universe/names/） ============
-        // 只解析 universe_names 还没有的 corp_id，节省 ESI 调用
+        // 排除 universe_names 已有 + corporation_infos 已有（SeAT 内部 corp），减少不必要的 ESI 调用
         $existingCorpInUniverseNames = empty($allCorpIds)
             ? []
             : DB::table('universe_names')
@@ -198,7 +210,18 @@ class ResolveUnknownNamesJob implements ShouldQueue
                 ->pluck('entity_id')
                 ->toArray();
 
-        $corpsNeedingName = array_values(array_diff($allCorpIds, $existingCorpInUniverseNames));
+        $existingCorpInInfos = empty($allCorpIds)
+            ? []
+            : DB::table('corporation_infos')
+                ->whereIn('corporation_id', $allCorpIds)
+                ->pluck('corporation_id')
+                ->toArray();
+
+        $corpsNeedingName = array_values(array_diff(
+            $allCorpIds,
+            $existingCorpInUniverseNames,
+            $existingCorpInInfos
+        ));
         $resolvedCorpCount = 0;
         $failedCorpBatch = 0;
 
