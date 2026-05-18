@@ -43,11 +43,10 @@ class ViolationController extends Controller
         }
 
         // 构建基础查询：LEFT JOIN 角色白名单 + 军团白名单（仅合同行 ON 条件化）
-        // 软过滤豁免语义：
-        //  - 钱包行：发起方在角色白名单 → 豁免（对手方是市场，无双方概念）
-        //  - 合同行：发起方 AND 接收方 都在白名单（角色或军团）→ 豁免；任一方在白名单外即显示
-        // 「单方在白名单」= 个人在角色白名单 OR 当前所属军团在军团白名单
-        // 显示条件（按德摩根）= 钱包+发起方不在角色白名单 OR 合同+任一方完全不在任何白名单
+        // 豁免语义（两套白名单不同）：
+        //  - 角色白名单：任一方在角色白名单 → 豁免（OR，单方拦截，钱包+合同均生效）
+        //  - 军团白名单：发起方军团 AND 接收方军团 都在军团白名单 → 豁免（AND，仅合同生效）
+        // 显示条件 = NOT(任一豁免) = 钱包+发起方不在角色白名单 OR 合同+(双方都不在角色白名单 AND 至少一方军团不在白名单)
         $query = DB::table('seat_audit_violations')
             ->leftJoin('seat_audit_whitelist as wl_chr', 'wl_chr.character_id', '=', 'seat_audit_violations.character_id')
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
@@ -62,25 +61,20 @@ class ViolationController extends Controller
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->where(function ($q) {
-                // 钱包行：发起方不在角色白名单则显示（counterparty 为市场，不参与判定）
+                // 钱包行：发起方不在角色白名单 → 显示
                 $q->where(function ($qw) {
                     $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
                        ->whereNull('wl_chr.id');
                 })
-                // 合同行：发起方"完全不在白名单" 或 接收方"完全不在白名单" → 显示
+                // 合同行：双方都不在角色白名单 AND 至少一方军团不在白名单 → 显示
                 ->orWhere(function ($qc) {
                     $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
-                       ->where(function ($qcc) {
-                           // 发起方完全不在任何白名单
-                           $qcc->where(function ($qi) {
-                               $qi->whereNull('wl_chr.id')
-                                  ->whereNull('corp_wl_chr.id');
-                           })
-                           // 或 接收方完全不在任何白名单
-                           ->orWhere(function ($qa) {
-                               $qa->whereNull('wl_ctp.id')
-                                  ->whereNull('corp_wl_ctp.id');
-                           });
+                       ->whereNull('wl_chr.id')   // issuer 不在角色白名单
+                       ->whereNull('wl_ctp.id')   // acceptor 不在角色白名单
+                       ->where(function ($qcorp) {
+                           // 至少一方军团不在白名单（NOT(双方都在军团白名单)）
+                           $qcorp->whereNull('corp_wl_chr.id')
+                                 ->orWhereNull('corp_wl_ctp.id');
                        });
                 });
             })
@@ -217,21 +211,18 @@ class ViolationController extends Controller
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->where(function ($q) {
+                // 与 index() 一致的豁免语义：角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免
                 $q->where(function ($qw) {
                     $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
                        ->whereNull('wl_chr.id');
                 })
                 ->orWhere(function ($qc) {
                     $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
-                       ->where(function ($qcc) {
-                           $qcc->where(function ($qi) {
-                               $qi->whereNull('wl_chr.id')
-                                  ->whereNull('corp_wl_chr.id');
-                           })
-                           ->orWhere(function ($qa) {
-                               $qa->whereNull('wl_ctp.id')
-                                  ->whereNull('corp_wl_ctp.id');
-                           });
+                       ->whereNull('wl_chr.id')
+                       ->whereNull('wl_ctp.id')
+                       ->where(function ($qcorp) {
+                           $qcorp->whereNull('corp_wl_chr.id')
+                                 ->orWhereNull('corp_wl_ctp.id');
                        });
                 });
             })

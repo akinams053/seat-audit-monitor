@@ -65,10 +65,11 @@
 
 过滤流程：
 1. **状态/类型筛选**：仅审 `status='finished'` 且 `type IN ('item_exchange','auction')`（跳过 courier/loan/unknown，避免物权未转移的误报）。
-2. **双方白名单 AND 豁免**：发起方 AND 接收方 都「在白名单」才跳过整份合同；任一方在白名单外（=对外部交易）则进入审计。
-    - 单方「在白名单」定义：他个人 `character_id` 在 `seat_audit_whitelist` 中 OR 他当前所属军团在 `seat_audit_corporation_whitelist` 中。
-    - 发起方军团：直接取 `contract.issuer_corporation_id`（合同表自带，无需 JOIN）。
-    - 接收方军团：从 `character_affiliations` 按本批 `acceptor_id` 预加载（避免 N+1）。
+2. **白名单组合豁免**（两套白名单语义不同）：
+    - **角色白名单（OR 单方拦截）**：issuer 或 acceptor **任一**在 `seat_audit_whitelist.character_id` → 跳过。
+    - **军团白名单（AND 双方豁免）**：issuer 军团 AND acceptor 军团 **都**在 `seat_audit_corporation_whitelist` → 跳过（豁免内部成员之间的合同）。
+    - **综合条件**：上述任一条件成立即跳过。
+    - 发起方军团直接取 `contract.issuer_corporation_id`；接收方军团从 `character_affiliations` 按本批 `acceptor_id` 预加载（避免 N+1）。
     - assignee 不参与判定：私下合同 assignee==acceptor 已被覆盖；公开/corp/alliance 合同 assignee 不是 character。
 3. **物品匹配**：合同 items 中任一 `type_id` 命中监控名单即记违规。
 4. **违规粒度**：一个 `(contract_id, type_id)` 一条 violation。若同一合同含多种监控物品，落多条；同 type_id 多 record（如 is_singleton 装配舰船）则聚合 quantity 到 `details.item.quantity`。
@@ -89,13 +90,17 @@
 
 ### 4.4 白名单查询层软过滤
 - **生效位置**：仅在 `ViolationController::index` / `::export` 查询时（即 UI 列表和 CSV 导出），不影响 Job 的扫描入库逻辑。
-- **豁免语义**：
-    - 钱包行：发起方 `character_id` 在角色白名单 → 豁免（对手方是市场，无双方概念，军团白名单不参与）。
-    - 合同行：发起方 AND 接收方 都「在白名单」（角色或军团）→ 豁免；任一方在白名单外即显示。
-- **JOIN 结构**：违规表分别 LEFT JOIN 角色白名单两次（发起方/接收方 character_id）+ `character_affiliations` 两次（ON 子句 `AND audit_type='contracts'` 让钱包行不命中）+ `seat_audit_corporation_whitelist` 两次。WHERE 子句按 audit_type 分支：钱包行用单方拦截；合同行按德摩根展开为「发起方完全不在任何白名单 OR 接收方完全不在任何白名单」。
-- **设计取舍**：白名单更新即时生效、可逆、DB 数据不动。军团使用「当前 affiliation」语义（角色当前所属军团），不是合同发生时的历史 affiliation——若某成员合同发生时不在白名单军团，之后加入了白名单军团，那条历史 violation 也会被软过滤排除掉。
-- **业务直觉**：白名单是「豁免名单」。把内部主公司加进军团白名单 → 内部成员之间的合同豁免，内部与外部之间的合同仍审计——这是「审计内 ↔ 外边界」的常见用例。
-- **已知盲区**：`assignee_id` 不单独成列。新语义下 Job 扫描已不依赖 assignee 检查（acceptor 即真实接收方），软过滤同样不查 assignee。属设计取舍非盲区。
+- **豁免语义**（两套白名单不同）：
+    - 钱包行：发起方 `character_id` 在角色白名单 → 豁免（军团白名单不参与）。
+    - 合同行：(issuer OR acceptor) 任一在角色白名单 → 豁免；或 (issuer 军团 AND acceptor 军团) 都在军团白名单 → 豁免。综合任一成立即豁免。
+- **JOIN 结构**：违规表分别 LEFT JOIN 角色白名单两次（发起方/接收方 character_id）+ `character_affiliations` 两次（ON 子句 `AND audit_type='contracts'` 让钱包行不命中）+ `seat_audit_corporation_whitelist` 两次。WHERE 子句按 audit_type 分支：
+    - 钱包行：`wl_chr.id IS NULL`
+    - 合同行：`wl_chr.id IS NULL AND wl_ctp.id IS NULL AND (corp_wl_chr.id IS NULL OR corp_wl_ctp.id IS NULL)`
+- **设计取舍**：白名单更新即时生效、可逆、DB 数据不动。军团使用「当前 affiliation」语义（角色当前所属军团），不是合同发生时的历史 affiliation。
+- **业务直觉**：
+    - 角色白名单 = 个人豁免（高度信任的角色，无论交易对方是谁都不审）
+    - 军团白名单 = 内部互转豁免（把内部主公司加进 → 仅内部成员之间的合同豁免，与外部的交易仍审）
+- **已知盲区**：`assignee_id` 不单独成列。新语义下 Job 和软过滤均不查 assignee。属设计取舍非盲区。
 
 ## 5. 插件开发规范 (SeAT 5.x Plugin)
 

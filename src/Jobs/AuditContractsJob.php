@@ -167,23 +167,25 @@ class AuditContractsJob implements ShouldQueue
                         $maxCompletedAt = $completedAt;
                     }
 
-                    // 过滤步骤①：双方白名单拦截（AND 豁免语义）。
-                    // 单方「在白名单」定义：他个人在角色白名单 OR 他当前所属军团在军团白名单。
-                    // 只有 issuer 和 acceptor 都满足该条件，才跳过整份合同（豁免内部成员之间的合同）。
-                    // 任一方在白名单外（=对外部交易）即进入审计。assignee 在新语义下不参与判定：
-                    //  - 私下 item_exchange 合同中 assignee==acceptor，已被 acceptor 检查覆盖
-                    //  - 公开/corp/alliance 合同中 assignee 不是 character ID，角色白名单查不到
+                    // 过滤步骤①：白名单综合判定。两套白名单语义不同：
+                    //  - 角色白名单：任一方在角色白名单（issuer OR acceptor） → 跳过（单方拦截）
+                    //  - 军团白名单：发起方军团 AND 接收方军团 都在军团白名单 → 跳过（双方都内部互转才豁免）
+                    // 综合：任一条件成立即跳过。assignee 不参与新语义（acceptor 已覆盖私下合同；公开/corp 合同 assignee 不是 character）。
                     $acceptorCorp = $contract->acceptor_id
                         ? ($acceptorCorpMap[$contract->acceptor_id] ?? null)
                         : null;
 
-                    $issuerWhitelisted = isset($whitelistIds[$contract->issuer_id])
-                        || isset($corporationWhitelistIds[$contract->issuer_corporation_id]);
+                    $issuerCharWhitelisted = isset($whitelistIds[$contract->issuer_id]);
+                    $acceptorCharWhitelisted = isset($whitelistIds[$contract->acceptor_id]);
+                    $issuerCorpWhitelisted = isset($corporationWhitelistIds[$contract->issuer_corporation_id]);
+                    $acceptorCorpWhitelisted = $acceptorCorp !== null
+                        && isset($corporationWhitelistIds[$acceptorCorp]);
 
-                    $acceptorWhitelisted = isset($whitelistIds[$contract->acceptor_id])
-                        || ($acceptorCorp !== null && isset($corporationWhitelistIds[$acceptorCorp]));
+                    $exempt = $issuerCharWhitelisted
+                        || $acceptorCharWhitelisted
+                        || ($issuerCorpWhitelisted && $acceptorCorpWhitelisted);
 
-                    if ($issuerWhitelisted && $acceptorWhitelisted) {
+                    if ($exempt) {
                         continue;
                     }
 
