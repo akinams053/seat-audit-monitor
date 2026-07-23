@@ -17,6 +17,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Seat\SeatAuditMonitor\Enums\AuditType;
 
 class ResolveUnknownNamesJob implements ShouldQueue
 {
@@ -57,7 +58,7 @@ class ResolveUnknownNamesJob implements ShouldQueue
         // 即使角色名已经解析（character_name 已是真实姓名），他们可能还没在 character_affiliations 里——
         // 没 affiliation 则 UI 显示不出军团。这里把所有合同行的 issuer + acceptor 都纳入 affiliation 解析。
         $contractParticipantIds = DB::table('seat_audit_violations')
-            ->where('audit_type', 'contracts')
+            ->where('audit_type', AuditType::Contracts->value)
             ->select('character_id', 'counterparty_id')
             ->get()
             ->flatMap(fn ($r) => [$r->character_id, $r->counterparty_id])

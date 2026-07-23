@@ -139,24 +139,37 @@
     - `seat-audit-monitor.view`：查看违规记录、导出 CSV。
     - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描、ESI 解析未知名字。
 
-## 7. SSH 调试 (Production Debug)
+## 7. SSH 调试（测试 / 生产环境）
 
-本仓库内置 SSH 调试通道，便于在生产服务器上验证插件行为（迁移、扫描结果、日志）。
+本仓库可以连接测试服务器和生产服务器，用于验证插件行为（迁移、扫描结果、日志）。两个环境必须严格区分，禁止根据默认凭据或历史上下文自行推断连接目标。
 
-### 7.1 工具
+### 7.1 环境与连接方式
 
-- 入口：`scripts/ssh-seat 'remote shell command'`（bash wrapper，跨平台）
-- 实现：`scripts/ssh_seat.py`（paramiko 密码登录）
-- 凭据：项目根 `.creds`（4 行：HOST / PORT / USER / PASSWORD），格式见 `.creds.example`
-- `.creds` 已加入 `.gitignore`，不会进入版本控制
+- **测试服务器**：
+    - 地址：`192.168.71.35`
+    - SSH 用户：`ubuntu`
+    - SSH 私钥：项目内 `scripts/all.key`
+    - 远端主机名：`UbuntuCloud2204`
+    - SeAT 目录：`/var/www/seat`
+    - 连接方式：`ssh -i ./scripts/all.key ubuntu@192.168.71.35`
+- **生产服务器**：
+    - 地址：`129.226.211.33`
+    - 站点域名：`https://yeluo-xinghai.icu`
+    - SeAT 目录：`/var/www/seat`
+    - 入口：`scripts/ssh-seat 'remote shell command'`（bash wrapper，跨平台）
+    - 实现：`scripts/ssh_seat.py`（paramiko 密码登录）
+    - 凭据：项目根 `.creds`（4 行：HOST / PORT / USER / PASSWORD），格式见 `.creds.example`
+    - `.creds` 已加入 `.gitignore`，不会进入版本控制
 
 ### 7.2 协作约定
 
-- **目标环境是生产服务器**（`/var/www/seat`，Ubuntu 22.04 + PHP 8.4 + MariaDB + Redis）。详见 `../eve-seat-debug/server-environment.md`
-- **只读优先**：`SELECT` / `tail` / `ls` / `php artisan ... --pretend` 等只读命令可直接执行；任何写操作（`INSERT`/`UPDATE`/`DELETE`/`migrate`/`config:cache`/重启服务）**必须先与用户确认**
-- **客观推理，不猜测**：信息不足时直接说明还需要什么数据，不要凭印象给方案
-- **每次最多 3 步操作**，逐步推进，等用户反馈后再继续
-- **没有验证过的方案不直接上线**：先在 SSH 会话内 dry-run / `--pretend` / 单条 SQL 验证，再合入分支
+- **每次连接 SSH 前必须先询问用户，并等待用户明确确认本次连接的是测试服务器还是生产服务器；即使只执行只读命令也不能跳过确认。**
+- `.creds` 只用于生产服务器；`scripts/all.key` 只用于测试服务器，禁止混用。
+- 生产环境为 Ubuntu 22.04 + PHP 8.4 + MariaDB + Redis，详细资料见 `../eve-seat-debug/server-environment.md`。
+- **只读优先**：`SELECT` / `tail` / `ls` / `php artisan ... --pretend` 等只读命令优先；任何写操作（`INSERT`/`UPDATE`/`DELETE`/`migrate`/`config:cache`/重启服务）**必须另行与用户确认**。
+- **客观推理，不猜测**：信息不足时直接说明还需要什么数据，不要凭印象给方案。
+- **每次最多 3 步操作**，逐步推进，等用户反馈后再继续。
+- **没有验证过的方案不直接上线**：先在测试服务器或 SSH 会话内 dry-run / `--pretend` / 单条 SQL 验证，再合入分支。
 
 ### 7.3 常用诊断片段
 

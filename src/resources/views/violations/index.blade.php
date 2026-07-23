@@ -18,13 +18,8 @@
         <div class="alert alert-danger">{{ session('error') }}</div>
         @endif
 
-        {{-- 各类型 label --}}
+        {{-- auditTypeLabels / auditTypes 由 Controller 基于 AuditType enum 注入，Blade 不再重复维护类型字符串。 --}}
         @php
-            $auditTypeLabels = [
-                'all' => '全部',
-                'wallet_transactions' => '钱包交易',
-                'contracts' => '合同',
-            ];
             // availability 中文 + 颜色映射，UI 来源 badge 用
             $availabilityLabels = [
                 'public'      => '公开',
@@ -51,8 +46,8 @@
                         <label for="audit_type" class="mr-2">审计类型</label>
                         <select id="audit_type" name="audit_type" class="form-control form-control-sm">
                             <option value="all" @selected(($auditType ?? 'all') === 'all')>全部</option>
-                            <option value="wallet_transactions" @selected(($auditType ?? 'all') === 'wallet_transactions')>钱包交易</option>
-                            <option value="contracts" @selected(($auditType ?? 'all') === 'contracts')>合同</option>
+                            <option value="{{ $auditTypes['wallet'] }}" @selected(($auditType ?? 'all') === $auditTypes['wallet'])>{{ $auditTypeLabels[$auditTypes['wallet']] }}</option>
+                            <option value="{{ $auditTypes['contracts'] }}" @selected(($auditType ?? 'all') === $auditTypes['contracts'])>{{ $auditTypeLabels[$auditTypes['contracts']] }}</option>
                         </select>
                     </div>
                     <div class="form-group mr-3">
@@ -179,7 +174,7 @@
                         @php
                             // 预先组装合同详情 modal 的 data payload，避免在 attribute 里跨行写 @json
                             // 仅合同行使用；钱包行不会读到
-                            $contractModalPayload = $v->audit_type === 'contracts' ? [
+                            $contractModalPayload = $v->audit_type === $auditTypes['contracts'] ? [
                                 'details'               => $v->details,
                                 'amount'                => $v->amount,
                                 'violation_time'        => $v->violation_time,
@@ -193,14 +188,14 @@
                                 'acceptor_corp_ticker'  => $v->acceptor_corp_ticker,
                             ] : null;
                         @endphp
-                        <tr class="{{ $v->audit_type === 'contracts' && (float) $v->amount === 0.0 ? 'table-secondary' : '' }}">
+                        <tr class="{{ $v->audit_type === $auditTypes['contracts'] && (float) $v->amount === 0.0 ? 'table-secondary' : '' }}">
                             {{-- 发起方角色名 --}}
                             <td>{{ $v->character_name }}</td>
                             {{-- 发起方军团：合同行才有；显示 ticker（hover 显示 name） --}}
                             <td>
-                                @if($v->audit_type === 'contracts' && !empty($v->issuer_corp_ticker))
+                                @if($v->audit_type === $auditTypes['contracts'] && !empty($v->issuer_corp_ticker))
                                     <span title="{{ $v->issuer_corp_name }}">{{ $v->issuer_corp_ticker }}</span>
-                                @elseif($v->audit_type === 'contracts' && !empty($v->issuer_corp_name))
+                                @elseif($v->audit_type === $auditTypes['contracts'] && !empty($v->issuer_corp_name))
                                     <span>{{ $v->issuer_corp_name }}</span>
                                 @else
                                     -
@@ -208,7 +203,7 @@
                             </td>
                             {{-- 接收方角色名 --}}
                             <td>
-                                @if($v->audit_type === 'wallet_transactions')
+                                @if($v->audit_type === $auditTypes['wallet'])
                                     <span class="badge badge-secondary">市场</span>
                                 @else
                                     {{ $v->counterparty_name ?? '-' }}
@@ -216,7 +211,7 @@
                             </td>
                             {{-- 接收方军团 --}}
                             <td>
-                                @if($v->audit_type === 'wallet_transactions')
+                                @if($v->audit_type === $auditTypes['wallet'])
                                     <span class="text-muted">市场</span>
                                 @elseif(!empty($v->acceptor_corp_ticker))
                                     <span title="{{ $v->acceptor_corp_name }}">{{ $v->acceptor_corp_ticker }}</span>
@@ -231,15 +226,15 @@
                             {{-- 金额 --}}
                             <td>
                                 {{ number_format($v->amount, 2) }}
-                                @if($v->audit_type === 'contracts' && (float) $v->amount === 0.0)
+                                @if($v->audit_type === $auditTypes['contracts'] && (float) $v->amount === 0.0)
                                     <small class="text-muted">(零金额)</small>
                                 @endif
                             </td>
                             {{-- 来源 badge：钱包 + 4 种合同 availability 细分 --}}
                             <td>
-                                @if($v->audit_type === 'wallet_transactions')
+                                @if($v->audit_type === $auditTypes['wallet'])
                                     <span class="badge badge-secondary">钱包</span>
-                                @elseif($v->audit_type === 'contracts')
+                                @elseif($v->audit_type === $auditTypes['contracts'])
                                     @php
                                         $availKey   = $v->contract_availability;
                                         $availLabel = $availabilityLabels[$availKey] ?? null;
@@ -256,7 +251,7 @@
                             </td>
                             {{-- 合同详情：合同行作为按钮触发 modal 显示快照详情；样式为可点击按钮，显示 #contract_id --}}
                             <td>
-                                @if($v->audit_type === 'contracts')
+                                @if($v->audit_type === $auditTypes['contracts'])
                                     <button type="button"
                                             class="btn btn-outline-primary btn-sm contract-detail-btn"
                                             data-toggle="modal"

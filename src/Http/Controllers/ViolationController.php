@@ -9,6 +9,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Gate;
+use Seat\SeatAuditMonitor\Enums\AuditType;
 use Seat\SeatAuditMonitor\Jobs\AuditContractsJob;
 use Seat\SeatAuditMonitor\Jobs\AuditWalletTransactionsJob;
 use Seat\SeatAuditMonitor\Jobs\ResolveUnknownNamesJob;
@@ -39,7 +40,7 @@ class ViolationController extends Controller
         }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
-        if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
+        if (! in_array($auditType, array_merge(['all'], AuditType::itemViolationValues()), true)) {
             $auditType = 'all';
         }
 
@@ -56,7 +57,7 @@ class ViolationController extends Controller
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
             ->leftJoin('character_affiliations as aff_chr', function ($join) {
                 $join->on('aff_chr.character_id', '=', 'seat_audit_violations.character_id')
-                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+                    ->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value);
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
@@ -66,7 +67,7 @@ class ViolationController extends Controller
             })
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
-                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+                    ->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value);
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
@@ -76,11 +77,11 @@ class ViolationController extends Controller
             })
             ->where(function ($q) {
                 $q->where(function ($qw) {
-                    $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
+                    $qw->where('seat_audit_violations.audit_type', '=', AuditType::WalletTransactions->value)
                        ->whereNull('wl_chr.id');
                 })
                 ->orWhere(function ($qc) {
-                    $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
+                    $qc->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value)
                        ->whereNull('wl_chr.id')
                        ->whereNull('wl_ctp.id')
                        ->where(function ($qcorp) {
@@ -139,9 +140,24 @@ class ViolationController extends Controller
         ]);
         $violations = $query->paginate(50)->appends($paginationParams);
 
+        // Blade 只消费集中定义的旧页面审计类型和标签，不再自行维护字符串白名单。
+        $auditTypeLabels = AuditType::itemViolationLabels(includeAll: true);
+        $auditTypes = [
+            'wallet'    => AuditType::WalletTransactions->value,
+            'contracts' => AuditType::Contracts->value,
+        ];
+
         return view(
             'seat-audit-monitor::violations.index',
-            compact('violations', 'startDate', 'endDate', 'auditType', 'keyword')
+            compact(
+                'violations',
+                'startDate',
+                'endDate',
+                'auditType',
+                'keyword',
+                'auditTypeLabels',
+                'auditTypes'
+            )
         );
     }
 
@@ -233,7 +249,7 @@ class ViolationController extends Controller
         }
 
         // 审计类型筛选仅允许已知值，非法值按全部处理
-        if (! in_array($auditType, ['all', 'wallet_transactions', 'contracts'], true)) {
+        if (! in_array($auditType, array_merge(['all'], AuditType::itemViolationValues()), true)) {
             $auditType = 'all';
         }
 
@@ -244,7 +260,7 @@ class ViolationController extends Controller
             ->leftJoin('seat_audit_whitelist as wl_ctp', 'wl_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
             ->leftJoin('character_affiliations as aff_chr', function ($join) {
                 $join->on('aff_chr.character_id', '=', 'seat_audit_violations.character_id')
-                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+                    ->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value);
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_chr', 'corp_wl_chr.corporation_id', '=', 'aff_chr.corporation_id')
             ->leftJoin('corporation_infos as corp_chr_info', 'corp_chr_info.corporation_id', '=', 'aff_chr.corporation_id')
@@ -254,7 +270,7 @@ class ViolationController extends Controller
             })
             ->leftJoin('character_affiliations as aff_ctp', function ($join) {
                 $join->on('aff_ctp.character_id', '=', 'seat_audit_violations.counterparty_id')
-                    ->where('seat_audit_violations.audit_type', '=', 'contracts');
+                    ->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value);
             })
             ->leftJoin('seat_audit_corporation_whitelist as corp_wl_ctp', 'corp_wl_ctp.corporation_id', '=', 'aff_ctp.corporation_id')
             ->leftJoin('corporation_infos as corp_ctp_info', 'corp_ctp_info.corporation_id', '=', 'aff_ctp.corporation_id')
@@ -264,11 +280,11 @@ class ViolationController extends Controller
             })
             ->where(function ($q) {
                 $q->where(function ($qw) {
-                    $qw->where('seat_audit_violations.audit_type', '=', 'wallet_transactions')
+                    $qw->where('seat_audit_violations.audit_type', '=', AuditType::WalletTransactions->value)
                        ->whereNull('wl_chr.id');
                 })
                 ->orWhere(function ($qc) {
-                    $qc->where('seat_audit_violations.audit_type', '=', 'contracts')
+                    $qc->where('seat_audit_violations.audit_type', '=', AuditType::Contracts->value)
                        ->whereNull('wl_chr.id')
                        ->whereNull('wl_ctp.id')
                        ->where(function ($qcorp) {
@@ -343,7 +359,9 @@ class ViolationController extends Controller
             'Expires'             => '0',
         ];
 
-        $callback = function () use ($records) {
+        $auditTypeLabels = AuditType::itemViolationLabels();
+
+        $callback = function () use ($records, $auditTypeLabels) {
             $handle = fopen('php://output', 'w');
 
             // 写入 UTF-8 BOM，确保 Excel 正确识别中文编码
@@ -367,27 +385,24 @@ class ViolationController extends Controller
 
             // 逐行写入违规记录数据
             foreach ($records as $row) {
-                // 内部审计类型转中文显示
-                $auditTypeLabel = [
-                    'wallet_transactions' => '钱包交易',
-                    'contracts'           => '合同',
-                ][$row->audit_type] ?? $row->audit_type;
+                // 内部审计类型转中文显示，标签由 AuditType 集中维护。
+                $auditTypeLabel = $auditTypeLabels[$row->audit_type] ?? $row->audit_type;
 
                 // 接收方：合同行用快照中的 acceptor 名字；钱包行旧记录可能为 NULL，统一兜底为「市场」
                 $counterpartyName = $row->counterparty_name
-                    ?? ($row->audit_type === 'wallet_transactions' ? '市场' : '');
+                    ?? ($row->audit_type === AuditType::WalletTransactions->value ? '市场' : '');
 
                 // 军团：合同行才有；钱包行接收方为「市场」
                 $issuerCorp = '';
                 $acceptorCorp = '';
-                if ($row->audit_type === 'contracts') {
+                if ($row->audit_type === AuditType::Contracts->value) {
                     $issuerCorp = $row->issuer_corp_name
                         ? $row->issuer_corp_name . (($row->issuer_corp_ticker) ? ' [' . $row->issuer_corp_ticker . ']' : '')
                         : '';
                     $acceptorCorp = $row->acceptor_corp_name
                         ? $row->acceptor_corp_name . (($row->acceptor_corp_ticker) ? ' [' . $row->acceptor_corp_ticker . ']' : '')
                         : '';
-                } elseif ($row->audit_type === 'wallet_transactions') {
+                } elseif ($row->audit_type === AuditType::WalletTransactions->value) {
                     $acceptorCorp = '市场';
                 }
 
@@ -411,7 +426,7 @@ class ViolationController extends Controller
                     $row->character_id,
                     $auditTypeLabel,
                     $availabilityLabel,
-                    $row->audit_type === 'contracts' ? $row->contract_id : '',
+                    $row->audit_type === AuditType::Contracts->value ? $row->contract_id : '',
                 ]);
             }
 

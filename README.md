@@ -27,6 +27,19 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
+## 军团审查 2.0 开发状态
+
+当前 `feature/corporation-audit-2.0` 分支正在开发“受审军团成员与外部方之间的 ISK 捐赠、低价合同”审查。现阶段已经完成第一批基础设施，但新扫描器和独立页面尚未启用：
+
+- 新增可配置的受审军团表 `seat_audit_corporations`，初始军团 `98588384` 默认保持停用。
+- 新增按 `scanner + audit_corporation_id` 隔离的复合游标表 `seat_audit_scan_cursors`，旧水位线表继续保留以支持平滑切换。
+- 扩展违规记录结构，加入 `source_event_key`、审计军团、成员/外部方、方向和双方军团快照字段；`type_id` / `item_name` 允许为空，为纯 ISK 事件预留表达能力。
+- 为可识别的旧钱包和合同记录回填 SHA-256 来源事件键；历史重复仅保留最早一条规范键，不删除任何历史审计记录。
+- 旧钱包和监控物品合同扫描已接入 `insertOrIgnore()` 幂等写入；临时回扫、任务重试和并发重复事件由唯一键拦截。
+- 审计类型集中定义为 `wallet_transactions`、`contracts`、`isk_donations`、`member_contracts`，后续 Command、UI、CSV 和名称解析共用同一注册表。
+
+完整开发拆分和完成进度见 [`todo.md`](todo.md)。在 donation / member-contract scanner、独立 UI 和测试完成前，不应把本分支视为可直接启用新军团审查业务的稳定版本。
+
 ## 环境要求
 
 - Eve SeAT 5.x
@@ -55,8 +68,13 @@ sudo -u www-data php artisan config:cache
 sudo -u www-data php artisan route:cache
 ```
 
-> 想试用尚未合入 main 的功能分支，把上面 `dev-main` 换成对应分支约束，例如：
-> `composer require akinams053/seat-audit-monitor:dev-feature/contract-audit`
+> 想试用尚未合入 main 的军团审查 2.0 基础设施分支，必须先确认该分支已经推送到远端，然后使用：
+> `composer require akinams053/seat-audit-monitor:dev-feature/corporation-audit-2.0 --update-with-dependencies`
+>
+> 同一分支后续更新可执行：
+> `composer update akinams053/seat-audit-monitor --with-dependencies`
+>
+> 尚未 push 的本地分支无法被服务器 Composer 拉取；这种情况只能使用上文的本地 path repository 方式。
 
 ### 本地路径安装（开发调试）
 
@@ -118,6 +136,34 @@ sudo -u www-data php artisan route:clear && \
 sudo -u www-data php artisan view:clear
 ```
 
+### 军团审查 2.0 开发分支升级
+
+当前阶段只升级数据库基础、统一审计类型和旧扫描幂等写入，不会启用 ISK 捐赠或成员低价合同扫描。建议先预览插件 migration，再执行实际迁移：
+
+```bash
+cd /var/www/seat
+
+# 1. 拉取已推送的开发分支
+sudo -u www-data composer require \
+  akinams053/seat-audit-monitor:dev-feature/corporation-audit-2.0 \
+  --update-with-dependencies
+
+# 2. 只预览本插件 migration
+sudo -u www-data php artisan migrate --pretend \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
+
+# 3. 确认 SQL 后再执行实际迁移
+sudo -u www-data php artisan migrate \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
+
+# 4. 清理插件相关缓存
+sudo -u www-data php artisan config:clear
+sudo -u www-data php artisan route:clear
+sudo -u www-data php artisan view:clear
+```
+
+本阶段新增 6 个 migration：受审军团配置、初始军团配置、复合扫描游标、违规表扩展、历史来源事件键回填、来源事件键唯一索引。回填 migration 不删除历史重复行；只有每组最早记录获得规范键，其余历史行保留 `source_event_key=NULL`。迁移日志会输出 scanned / backfilled / duplicates / unresolved 统计。
+
 ### 升级验证
 
 1. 侧边栏点击 **违规记录**，确认筛选区出现 **审计类型** 下拉
@@ -147,7 +193,7 @@ sudo -u www-data php artisan seat:audit:scan --type=contracts --since=2025-01-01
 sudo -u www-data php artisan seat:audit:scan --type=contracts --since="2025-06-01 00:00:00"
 ```
 
-⚠ **注意**：`--since` 会**重复处理已扫过的合同**（`seat_audit_violations` 表无去重约束），可能产生重复行。建议先 `DELETE FROM seat_audit_violations WHERE audit_type='contracts' AND violation_time >= '<since>'` 清掉对应区间再回扫。
+`--since` 会重新读取指定时间后的合同，但不会推进正式水位线。当前版本通过 `source_event_key = SHA-256(contracts|contract_id|type_id)` 和唯一索引幂等写入，已存在的 `(contract_id, type_id)` 会被自动忽略，**无需也不应为回扫预先删除历史违规记录**。
 
 如果希望永久改基线（例如未来想从 2025 起持续审计），直接改水位线行即可：
 
@@ -298,7 +344,8 @@ protected function schedule(Schedule $schedule)
 
 ## 管理要点
 
-- **水位线机制**：扫描进度记录在 `seat_audit_status` 表中（钱包按 `last_id` 推进，合同按 `last_completed_at` 推进），确保每条记录只处理一次
+- **水位线机制**：旧扫描进度继续记录在 `seat_audit_status` 表中（钱包按 `last_id` 推进，合同按 `last_completed_at` 推进）；军团审查 2.0 后续扫描器使用 `seat_audit_scan_cursors` 按 scanner 和受审军团分别推进
+- **幂等写入**：钱包事件使用 `wallet_transactions|character_id|transaction_id`，监控物品合同使用 `contracts|contract_id|type_id` 生成 SHA-256 `source_event_key`；唯一索引负责拦截重试、回扫和并发重复写入
 - **快照存储**：违规记录保存发起方/接收方角色名、物品名的快照副本，不受原始数据变更影响；合同审计还快照 issuer/assignee/acceptor 三方信息到 `details.parties`
 - **接收方语义**：钱包审计 `counterparty_name='市场'`（对手方是市场撮合系统）；合同审计 `counterparty_name=acceptor 角色名`
 - **批量处理**：每次以 500 条为一批处理，白名单 / 监控名单 / 角色名映射预加载至内存，避免 N+1 查询
@@ -313,7 +360,10 @@ protected function schedule(Schedule $schedule)
 ```bash
 cd /var/www/seat
 
-# 1. 回滚数据库（删除插件的 4 张表）
+# 1. 按实际已执行批次回滚插件 migration
+# 建议先用 migrate:status 核对 batch；不要在共享 SeAT 数据库中盲目指定过大的 --step。
+sudo -u www-data php artisan migrate:status \
+  --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 sudo -u www-data php artisan migrate:rollback \
   --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 

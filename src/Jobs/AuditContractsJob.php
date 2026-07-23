@@ -1,6 +1,6 @@
 <?php
 
-// /Users/akina/project/seat-audit-monitor/src/Jobs/AuditContractsJob.php
+// src/Jobs/AuditContractsJob.php
 // 核心增量审计 Job，扫描已完成合同记录，检测包含监控物品的违规合同
 
 namespace Seat\SeatAuditMonitor\Jobs;
@@ -12,16 +12,14 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
+use Seat\SeatAuditMonitor\Enums\AuditType;
 use Seat\SeatAuditMonitor\Models\AuditStatus;
+use Seat\SeatAuditMonitor\Services\Audit\SourceEventKeyFactory;
+use Seat\SeatAuditMonitor\Services\Audit\ViolationWriter;
 
 class AuditContractsJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
-
-    /**
-     * 审计类型标识，用于区分合同违规记录和钱包交易违规记录。
-     */
-    const AUDIT_TYPE = 'contracts';
 
     /**
      * 每批处理的合同数量，避免一次性加载过多合同和物品明细。
@@ -48,11 +46,16 @@ class AuditContractsJob implements ShouldQueue
         // - 否则按常规从水位线 last_completed_at 增量扫描；首次运行（无水位线行）会兜底到 Unix 纪元
         //   注：本插件 migration 已预置 contracts 基线为 2026-01-01，正常情况下不会落入兜底分支
         $lastCompletedAt = $this->sinceOverride
-            ?? AuditStatus::getLastCompletedAt(self::AUDIT_TYPE)
+            ?? AuditStatus::getLastCompletedAt(AuditType::Contracts->value)
             ?? Carbon::createFromTimestamp(0);
 
+        // 统一幂等键工厂和写入器：旧监控物品合同也开始写 source_event_key，
+        // 让 --since 回扫、任务重试或并发情况下依赖唯一索引自动去重。
+        $sourceEventKeyFactory = new SourceEventKeyFactory();
+        $violationWriter = new ViolationWriter();
+
         // 步骤2：预加载白名单角色 ID，并翻转为哈希表。
-        // 合同审计要求 issuer / assignee / acceptor 任意一方命中白名单就跳过整份合同。
+        // 合同审计要求 issuer / acceptor 任意一方命中白名单就跳过整份合同。
         $whitelistIds = array_flip(
             DB::table('seat_audit_whitelist')
                 ->pluck('character_id')
@@ -60,7 +63,7 @@ class AuditContractsJob implements ShouldQueue
         );
 
         // 步骤2.5：预加载军团白名单 — 仅用于合同审计的额外拦截。
-        // 拦截规则：合同的 issuer corp 或 acceptor 当前所属 corp 任一在此表中即跳过整份合同。
+        // 拦截规则：issuer 军团 AND acceptor 当前所属军团都在军团白名单时跳过整份合同。
         // 钱包审计不受此名单影响（按 §4.4 设计决策）。
         $corporationWhitelistIds = array_flip(
             DB::table('seat_audit_corporation_whitelist')
@@ -102,6 +105,8 @@ class AuditContractsJob implements ShouldQueue
                 $corporationWhitelistIds,
                 $monitoredTypeIds,
                 $characterNames,
+                $sourceEventKeyFactory,
+                $violationWriter,
                 &$maxCompletedAt
             ) {
                 // 步骤6a：收集当前 chunk 的合同 ID，用于一次性查询物品明细。
@@ -112,8 +117,8 @@ class AuditContractsJob implements ShouldQueue
                 }
 
                 // 步骤6a-2：本批 acceptor 当前所属军团 ID 映射（character_id => corporation_id）
-                // 仅拉取本批合同的 acceptor，避免一次性把全表 affiliations 搬进 PHP
-                // issuer corp 直接从合同表的 issuer_corporation_id 字段拿，无需 affiliations 查询
+                // 仅拉取本批合同的 acceptor，避免一次性把全表 affiliations 搬进 PHP。
+                // issuer corp 直接从合同表的 issuer_corporation_id 字段拿，无需 affiliations 查询。
                 $acceptorIds = $contracts->pluck('acceptor_id')->filter()->unique()->values()->toArray();
                 $acceptorCorpMap = empty($acceptorIds)
                     ? []
@@ -140,7 +145,7 @@ class AuditContractsJob implements ShouldQueue
                     $bucket = $itemsByContract[$item->contract_id][$item->type_id] ?? null;
 
                     if ($bucket === null) {
-                        // 首次出现：拷贝物品行作为快照，把 quantity 转 int 便于后续累加
+                        // 首次出现：拷贝物品行作为快照，把 quantity 转 int 便于后续累加。
                         $itemsByContract[$item->contract_id][$item->type_id] = (object) [
                             'record_id'   => $item->record_id,
                             'type_id'     => $item->type_id,
@@ -151,7 +156,7 @@ class AuditContractsJob implements ShouldQueue
                         continue;
                     }
 
-                    // 后续同 type_id 的 record：累加数量并追加 record_id
+                    // 后续同 type_id 的 record：累加数量并追加 record_id。
                     $bucket->quantity += (int) $item->quantity;
                     $bucket->record_ids[] = $item->record_id;
                 }
@@ -196,8 +201,8 @@ class AuditContractsJob implements ShouldQueue
                         continue;
                     }
 
-                    // 合同金额按产品决策取 price / reward 二者较大值，null 按 0 处理。
-                    $amount = max((float) $contract->price, (float) $contract->reward);
+                    // 合同金额按产品决策取 price / reward 二者较大值，使用 decimal 字符串比较，避免转 float。
+                    $amount = $this->maxDecimalString($contract->price, $contract->reward);
 
                     // parties 快照保存三方名称，避免后续 character_infos 变化影响历史审计记录。
                     // 三方 ID 在边角情况下可能为空（公开合同的 assignee 等），空 ID 不构造「Unknown (ID: )」字符串，
@@ -216,17 +221,22 @@ class AuditContractsJob implements ShouldQueue
                         // 违规粒度为一个 (contract_id, type_id) 一条记录。
                         // 若同一合同包含多种监控物品，将分别落库，便于后续按物品筛选和统计。
                         $violations[] = [
-                            'character_id'   => $contract->issuer_id,
-                            'character_name' => $issuerName,
-                            // 接收方快照：合同 finished 时 acceptor 必为 character ID，对应 character_infos.name 取出的名字
-                            // 与 character_id 一起用于查询层白名单软过滤（任一在白名单中则 UI 实时排除）
+                            'source_event_key' => $sourceEventKeyFactory->monitoredContract(
+                                $contract->contract_id,
+                                $item->type_id
+                            ),
+                            'source_reference' => 'contract:' . $contract->contract_id,
+                            'character_id'     => $contract->issuer_id,
+                            'character_name'   => $issuerName,
+                            // 接收方快照：合同 finished 时 acceptor 必为 character ID，对应 character_infos.name 取出的名字。
+                            // 与 character_id 一起用于查询层白名单软过滤（任一在白名单中则 UI 实时排除）。
                             'counterparty_id'   => $contract->acceptor_id,
                             'counterparty_name' => $acceptorName,
-                            'type_id'        => $item->type_id,
-                            'item_name'      => $monitoredTypeIds[$item->type_id],
-                            'amount'         => $amount,
-                            'violation_time' => $completedAt->toDateTimeString(),
-                            'details'        => json_encode([
+                            'type_id'           => $item->type_id,
+                            'item_name'         => $monitoredTypeIds[$item->type_id],
+                            'amount'            => $amount,
+                            'violation_time'    => $completedAt->toDateTimeString(),
+                            'details'           => [
                                 'contract' => [
                                     'contract_id'    => $contract->contract_id,
                                     'type'           => $contract->type,
@@ -241,7 +251,7 @@ class AuditContractsJob implements ShouldQueue
                                     'title'          => $contract->title,
                                 ],
                                 'item' => [
-                                    // 同 type_id 多 record 已聚合：quantity 是合计，record_ids 列出所有原始明细
+                                    // 同 type_id 多 record 已聚合：quantity 是合计，record_ids 列出所有原始明细。
                                     'record_id'   => $item->record_id,
                                     'record_ids'  => $item->record_ids,
                                     'type_id'     => $item->type_id,
@@ -253,20 +263,23 @@ class AuditContractsJob implements ShouldQueue
                                     'assignee_name' => $assigneeName,
                                     'acceptor_name' => $acceptorName,
                                 ],
-                            ]),
-                            'audit_type'     => self::AUDIT_TYPE,
-                            'contract_id'    => $contract->contract_id,
-                            // availability 快照：public / personal / corporation / alliance
-                            // 用于 UI 来源列细分；details JSON 不再单独冗余存储
-                            'contract_availability' => $contract->availability,
-                            'created_at'     => now()->toDateTimeString(),
+                            ],
+                            'audit_type'      => AuditType::Contracts->value,
+                            'contract_id'     => $contract->contract_id,
+                            // availability 快照：public / personal / corporation / alliance。
+                            // 用于 UI 来源列细分；details JSON 不再单独冗余存储。
+                            'contract_availability'      => $contract->availability,
+                            // 保存扫描时双方军团快照，供后续新页面或审计详情追溯当时判定依据。
+                            'character_corporation_id'   => $contract->issuer_corporation_id,
+                            'counterparty_corporation_id' => $acceptorCorp,
+                            'created_at'                 => now()->toDateTimeString(),
                         ];
                     }
                 }
 
-                // 本批次有违规记录才批量写入，减少数据库往返次数。
+                // 本批次有违规记录才批量幂等写入，减少数据库往返次数并自动忽略重复 source_event_key。
                 if (!empty($violations)) {
-                    DB::table('seat_audit_violations')->insert($violations);
+                    $violationWriter->insertOrIgnore($violations);
                 }
             });
 
@@ -274,7 +287,62 @@ class AuditContractsJob implements ShouldQueue
         // 仅在常规增量模式下推进（sinceOverride=null）；--since 临时回扫保留原水位线，
         // 避免一次性回扫的进度污染正常增量轨迹。
         if ($this->sinceOverride === null && $maxCompletedAt->gt($lastCompletedAt)) {
-            AuditStatus::setLastCompletedAt(self::AUDIT_TYPE, $maxCompletedAt);
+            AuditStatus::setLastCompletedAt(AuditType::Contracts->value, $maxCompletedAt);
         }
+    }
+
+    /**
+     * 在不转 float 的情况下比较两个 decimal 字符串，返回较大的规范金额字符串。
+     */
+    private function maxDecimalString(int|string|null $left, int|string|null $right): string
+    {
+        $left = $this->normalizeDecimalString($left);
+        $right = $this->normalizeDecimalString($right);
+
+        return $this->compareDecimalStrings($left, $right) >= 0 ? $left : $right;
+    }
+
+    /**
+     * 将数据库 decimal 值规范化为至少两位小数的字符串，空值按 0.00 处理。
+     */
+    private function normalizeDecimalString(int|string|null $value): string
+    {
+        $value = trim((string) ($value ?? '0'));
+
+        if (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $value) !== 1) {
+            throw new \InvalidArgumentException('合同 price/reward 不是有效 decimal。');
+        }
+
+        [$integer, $fraction] = array_pad(explode('.', $value, 2), 2, '');
+        $integer = ltrim($integer, '0') ?: '0';
+        $fraction = rtrim($fraction, '0');
+
+        return $fraction === '' ? $integer . '.00' : $integer . '.' . $fraction;
+    }
+
+    /**
+     * 比较两个非负 decimal 字符串；返回 1 表示 left 大，-1 表示 right 大，0 表示相等。
+     */
+    private function compareDecimalStrings(string $left, string $right): int
+    {
+        [$leftInteger, $leftFraction] = array_pad(explode('.', $left, 2), 2, '');
+        [$rightInteger, $rightFraction] = array_pad(explode('.', $right, 2), 2, '');
+
+        $integerCompare = strlen($leftInteger) <=> strlen($rightInteger);
+        if ($integerCompare !== 0) {
+            return $integerCompare;
+        }
+
+        $integerCompare = strcmp($leftInteger, $rightInteger);
+        if ($integerCompare !== 0) {
+            return $integerCompare <=> 0;
+        }
+
+        $scale = max(strlen($leftFraction), strlen($rightFraction));
+        $leftFraction = str_pad($leftFraction, $scale, '0');
+        $rightFraction = str_pad($rightFraction, $scale, '0');
+        $fractionCompare = strcmp($leftFraction, $rightFraction);
+
+        return $fractionCompare <=> 0;
     }
 }
