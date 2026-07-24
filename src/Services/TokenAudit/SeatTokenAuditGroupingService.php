@@ -43,6 +43,13 @@ final class SeatTokenAuditGroupingService
      */
     public function filterAndGroup(array $characters, string $status, string $lastSeen, string $joinedWithin, string $search): array
     {
+        // $characters 是查询层读取的完整当前军团成员名册；先固化 ID 集合，避免后续页面筛选
+        // （例如只看「账号过期」）把状态正常的主角色排除后，错误显示为「主角色不在当前军团成员范围」。
+        $currentMemberIds = [];
+        foreach ($characters as $character) {
+            $currentMemberIds[$character->characterId] = true;
+        }
+
         /** @var array<string, array{primary_id: ?int, primary_name: string, characters: array<int, TokenAuditCharacter>}> $groupRows */
         $groupRows = [];
 
@@ -98,11 +105,9 @@ final class SeatTokenAuditGroupingService
                 groupKey: $groupKey,
                 primaryCharacterId: $primaryCharacterId,
                 primaryCharacterName: $groupRow['primary_name'],
+                // 组内角色只代表当前筛选命中的显示行；成员范围必须始终按完整名册判定。
                 primaryCharacterInScope: $primaryCharacterId !== null
-                    && in_array($primaryCharacterId, array_map(
-                        static fn (TokenAuditCharacter $character): int => $character->characterId,
-                        $groupCharacters,
-                    ), true),
+                    && isset($currentMemberIds[$primaryCharacterId]),
                 characters: $groupCharacters,
                 priorityStatus: $priorityStatus,
             );
