@@ -184,7 +184,13 @@ class AuditMemberContractsJob implements ShouldQueue
                 $join->on('discovery.contract_id', '=', 'cd.contract_id');
             })
             // discovered_at 仅用于当前扫描排序和 cursor，不是合同业务快照的一部分。
-            ->select('cd.*', 'discovery.discovered_at')
+            // MariaDB/PDO 会把原始 cd.price 作为 PHP float 返回；额外 CAST 为 decimal 字符串，
+            // 供低价门槛与违规金额使用，避免二进制浮点参与 ISK 金额判定，同时保留原始快照字段。
+            ->select(
+                'cd.*',
+                'discovery.discovered_at',
+                DB::raw('CAST(cd.price AS DECIMAL(20, 2)) AS price_decimal'),
+            )
             ->where('cd.status', 'finished')
             ->whereIn('cd.type', ['item_exchange', 'auction'])
             ->whereNotNull('cd.date_completed');
@@ -247,7 +253,8 @@ class AuditMemberContractsJob implements ShouldQueue
                 continue;
             }
 
-            $price = $this->normalizeDecimal($contract->price ?? null);
+            // 低价规则只能读取 SQL CAST 后的十进制字符串；原始 price 可能是 PHP float，必须拒绝。
+            $price = $this->normalizeDecimal($contract->price_decimal ?? null);
             if ($price === null || ! $this->isBelowPriceThreshold($price)) {
                 continue;
             }
@@ -313,7 +320,8 @@ class AuditMemberContractsJob implements ShouldQueue
             // discovered_at 是 character_contracts 的聚合发现时间，只能参与本轮 cursor，不能混入
             // 对外可追溯的合同业务快照；合同内容仍严格来自 contract_details。
             $contractDetails = (array) $contract;
-            unset($contractDetails['discovered_at']);
+            // price_decimal 是扫描时的精确金额投影，不是 SeAT contract_details 原始业务字段。
+            unset($contractDetails['discovered_at'], $contractDetails['price_decimal']);
 
             $violations[] = [
                 'source_event_key'            => $sourceEventKeyFactory->memberContract(
