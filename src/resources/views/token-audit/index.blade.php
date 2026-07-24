@@ -74,8 +74,16 @@
                         <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> 筛选</button>
                         {{-- 清除所有附加条件但保留状态标签；新请求自然回到第一页。 --}}
                         <a href="{{ route('seat-audit.token-audit.index', ['status' => $status]) }}" class="btn btn-sm btn-secondary">清除</a>
+                        {{-- 导出只透传角色级业务筛选；不能携带 page/per_page，否则会误导用户认为仅导出当前页。 --}}
+                        <a href="{{ route('seat-audit.token-audit.export', [
+                            'status' => $status,
+                            'last_seen' => $lastSeen,
+                            'joined_within' => $joinedWithin,
+                            'q' => $search,
+                        ]) }}" class="btn btn-sm btn-outline-success"><i class="fas fa-download"></i> 导出 CSV</a>
                     </div>
                 </form>
+                <p class="text-muted small mb-0 mt-2">CSV 导出当前筛选条件下的全部匹配角色，不受账号组分页限制；不包含 token、scope 或 SeAT 内部用户 ID。</p>
             </div>
         </div>
 

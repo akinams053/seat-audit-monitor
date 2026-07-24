@@ -26,6 +26,7 @@
 - [x] **角色头衔展示口径**：SeAT 源码已确认角色概览的「头衔」直接读取 `CharacterInfo::$title`，对应 `character_infos.title`；缺失时显示「无头衔」。不得以角色名人工映射，也不得把 `corporation_member_titles` / `corporation_titles` 的权限角色或其他职位字段冒充此列。
 - [x] **技能列表**：保留列，每行显示「暂未接入」，本阶段不读取技能。
 - [x] **时间规则**：UTC 相对时间 + 精确 UTC 提示；入团时间来自 `corporation_member_trackings.start_date`，最后上线唯一来自 `character_onlines.last_login`。两者均可筛选全部 / 30 天内 / 60 天内，边界按 UTC 自然日闭区间处理；不展示瞬时 `online` 状态。
+- [x] **CSV 导出**：导出当前角色级筛选命中的全部成员行，不受账号组分页影响；包含主角色归属、角色、头衔、令牌状态与精确 UTC 时间。禁止输出内部 SeAT user ID、group key、token/refresh token/scope/JWT/`expires_on`，并对全部 CSV 单元格实施 Excel/WPS 公式注入防护。
 
 ### 阶段 1：只读 schema preflight（阻塞实现）
 
