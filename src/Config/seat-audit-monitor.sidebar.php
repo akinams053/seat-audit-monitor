@@ -30,6 +30,13 @@ return [
                 'permission' => 'seat-audit-monitor.view',
             ],
             [
+                // 只读展示当前成员的 SeAT 令牌三态，不提供 token 刷新、扫描或管理操作。
+                'name'       => '令牌审查',
+                'icon'       => 'fas fa-id-card',
+                'route'      => 'seat-audit.token-audit.index',
+                'permission' => 'seat-audit-monitor.view',
+            ],
+            [
                 'name'       => '监控物品',
                 'icon'       => 'fas fa-cog',
                 'route'      => 'seat-audit.admin.items',

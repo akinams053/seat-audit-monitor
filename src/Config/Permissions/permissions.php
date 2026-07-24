@@ -7,10 +7,10 @@
 // 最终 Gate 权限标识：seat-audit-monitor.view / seat-audit-monitor.admin
 
 return [
-    // 查看违规记录的权限
+    // 查看审计结果的权限：覆盖旧违规记录、军团经济审计和只读令牌状态审查。
     'view'  => [
-        'label'       => '查看违规记录',
-        'description' => '允许查看审计监控违规交易记录列表',
+        'label'       => '查看审计记录',
+        'description' => '允许查看违规交易、军团审计及只读令牌状态审查页面',
     ],
     // 管理监控名单和白名单的权限
     'admin' => [

@@ -11,6 +11,8 @@ use Seat\SeatAuditMonitor\Console\Commands\ResolveUnknownNamesCommand;
 use Seat\SeatAuditMonitor\Services\Audit\DonationEventNormalizer;
 use Seat\SeatAuditMonitor\Services\Audit\DonationJournalScanner;
 use Seat\SeatAuditMonitor\Services\Audit\EntitySnapshotResolver;
+use Seat\SeatAuditMonitor\Services\TokenAudit\SeatTokenAuditGroupingService;
+use Seat\SeatAuditMonitor\Services\TokenAudit\SeatTokenAuditReadService;
 
 class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
 {
@@ -64,6 +66,9 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
         $this->app->singleton(DonationEventNormalizer::class);
         $this->app->singleton(EntitySnapshotResolver::class);
         $this->app->singleton(DonationJournalScanner::class);
+        // 令牌审查服务只包装固定字段的 SELECT 与无状态分组，不持有或刷新任何 token。
+        $this->app->singleton(SeatTokenAuditReadService::class);
+        $this->app->singleton(SeatTokenAuditGroupingService::class);
     }
 
     /**

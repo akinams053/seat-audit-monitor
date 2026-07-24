@@ -24,6 +24,10 @@ Route::group([
     Route::post('/corporation-audit/scan', 'CorporationAuditController@scan')
         ->name('seat-audit.corporation-audit.scan');
 
+    // 固定军团令牌状态审查：纯 GET 只读页面，没有扫描、刷新 token 或 ESI 调用入口。
+    Route::get('/token-audit', 'SeatTokenAuditController@index')
+        ->name('seat-audit.token-audit.index');
+
     // 手动触发审计扫描（POST 防止意外刷新重复触发）
     Route::post('/violations/scan', 'ViolationController@scan')
         ->name('seat-audit.violations.scan');

@@ -1,65 +1,55 @@
-# 军团审查 2.0：固定单军团实施状态
+# 军团审计插件：开发状态与 2.1 计划
 
-> 范围：在不改变 1.0 市场交易/监控物品合同审计的前提下，为 EVE corporation `98588384` 增加成员与外部方之间的 ISK 捐赠、成员低价合同审计。
+> 当前范围：在保持 1.0 市场交易/监控物品合同审计，以及 2.0 Donation/成员低价合同审计语义不变的前提下，为固定 EVE corporation `98588384` 增加 SeAT 令牌状态审查。
 >
-> 本轮明确不做：多受审军团管理、历史成员资格、`--dry-run`、新页面 CSV/详情 modal、令牌审查。军团审计 Web 页面已支持按当前标签异步提交扫描；令牌状态能力属于后续阶段。
+> 2.1 明确不做：令牌刷新或有效性探测、ESI scope 检查、ESI/SSO 调用、技能数据、最后地点、CSV/详情 modal、多军团支持、历史成员资格推断。
 
-## 已确定的业务口径
+## 已完成：军团审查 2.0
 
-- [x] **固定军团**：新 2.0 逻辑只处理 `corporation_id=98588384`；不提供多军团选择或配置管理页。
-- [x] **成员边界**：使用扫描执行时 `corporation_members(corporation_id=98588384)` 的当前成员名册；不根据当前名册回推历史入退团。
-- [x] **启用起点**：`audit_from` 由部署时人工设置，且同一配置行必须设置 `enabled=true`；任何新事件均要求发生时间不早于该值。
-- [x] **新白名单**：只检查外部方的角色白名单和当前军团白名单；受审成员本人命中白名单仍参与审计，Unknown 外部方不自动豁免。
-- [x] **兼容性**：1.0 `wallet_transactions` 与 `contracts` 保持原 Job、水位线、金额规则、白名单软过滤、旧列表和 CSV 查询范围不变。
+- [x] 固定军团 `98588384` 的成员范围、独立 cursor 与幂等来源键基础设施。
+- [x] ISK Donation 审计：镜像 journal 归并、成员 XOR、外部方白名单与独立 cursor。
+- [x] 成员低价合同审计：完成合同、成员 XOR、外部方白名单、十分钟 overlap 与每合同一条记录。
+- [x] 修复 `contract_details.price` 被 PDO 映射为 PHP float 导致成员低价合同跳过的问题：SQL `DECIMAL(20, 2)` 投影仅用于规则/金额，原始合同快照不混入内部投影。
+- [x] 军团审计独立页面、Donation/成员低价合同标签、受权限与 CSRF 保护的异步扫描入口。
+- [x] 测试服务器真实合同 `#234305678` 已成功写入 `member_contracts` violation；Horizon 已重启加载修复。
+- [x] 2.0 代码与文档已提交并推送；用户已决定不将 Donation 真实对账、旧 1.0 回归、历史漏报统计/补扫作为本阶段阻塞项。
 
-## 已实现
+## 进行中：令牌审查 2.1
 
-### 1. 基础数据与幂等写入
+### 已确定的业务口径
 
-- [x] 保留已发布的 2.0 migration：`seat_audit_corporations`、`seat_audit_scan_cursors`、violation 扩展字段和 `source_event_key` 唯一索引。
-- [x] 固定 `AuditCorporation::TARGET_CORPORATION_ID = 98588384`，新 cursor 与来源键均使用 EVE corporation ID，而非配置表自增主键。
-- [x] `CursorRepository::lockOrCreateForUpdate()` 通过 `insertOrIgnore()` 后加行锁处理首次扫描并发；来源写入与 cursor 推进可置于同一事务。
-- [x] 旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用独立的 `seat_audit_scan_cursors`。
+- [x] **成员范围**：始终读取 `corporation_members.corporation_id=98588384` 的当前游戏内成员，不以 SeAT 绑定、token 或 affiliation 推断成员资格。
+- [x] **令牌状态**：只读 `refresh_tokens` 聚合；任意 `deleted_at IS NULL` 为「状态正常」、仅存在已删除 token 为「账号过期」、无 token 行为「无 SeAT 用户」。不得读取 token 内容、scope 或其他授权秘密。
+- [x] **页面入口**：新增独立「令牌审查」页面，使用已有 `seat-audit-monitor.view` 权限；没有扫描、刷新、POST、队列或 ESI 请求。
+- [x] **主/子角色**：按 SeAT 用户绑定分组并使用其明确的主角色关系；未绑定 SeAT 的成员各自独立显示。状态标签只显示命中状态的角色行，但保留主角色分组标题。
+- [x] **展示字段**：令牌状态、角色名与头像、军团游戏内头衔、技能列表占位、入团时间、最后上线；不显示最后地点。
+- [x] **角色头衔展示口径**：SeAT 源码已确认角色概览的「头衔」直接读取 `CharacterInfo::$title`，对应 `character_infos.title`；缺失时显示「无头衔」。不得以角色名人工映射，也不得把 `corporation_member_titles` / `corporation_titles` 的权限角色或其他职位字段冒充此列。
+- [x] **技能列表**：保留列，每行显示「暂未接入」，本阶段不读取技能。
+- [x] **时间规则**：UTC 相对时间 + 精确 UTC 提示；最后上线可筛选全部 / 30 天内 / 60 天内，边界按 UTC 自然日闭区间处理。
 
-### 2. ISK 捐赠审计
+### 阶段 1：只读 schema preflight（阻塞实现）
 
-- [x] `AuditDonationsJob` 读取固定配置、当前成员名册和白名单；配置未启用、未设 `audit_from` 或名册为空时安全退出且不推进 cursor。
-- [x] `DonationJournalScanner` 只扫描 `character_wallet_journals.ref_type='player_donation'`。
-- [x] 同一笔正负镜像以共享 journal `id` 作为 canonical ID：单边记录可用，双边镜像必须校验 party、时间、金额、符号和 owner；异常镜像不猜测修正。
-- [x] 固定 `first_party_id → second_party_id` 为 donor → recipient；成员 XOR 决定 `outbound` / `inbound`，内部或无关事件跳过。
-- [x] Donation cursor 使用 `(occurred_at, 最小 owner character_id, canonical journal id)`；`source_event_key` 保护镜像、重试和重复扫描。
+- [x] 已在测试服务器只读确认 `corporation_members`、`refresh_tokens`、`character_infos`、`universe_names`、`corporation_member_trackings` 的实际字段与成员/token/tracking 索引。
+- [x] 已通过 `refresh_tokens.user_id → users.id → users.main_character_id` 确认「成员角色 → SeAT 用户 → 主角色」的数据关系；当前 token 关联成员未发现缺失用户或主角色。
+- [x] 已从 `/characters/{id}/sheet` 的 Controller、概览 View 与 `CharacterInfo` Model 源码确认：概览「头衔」为 `$character->title`，对应 `character_infos.title`；`$character->titles` 才是权限头衔列表，不能用于本列。
+- [ ] 待读取服务实现后，仅针对最终固定查询执行一次受控 `EXPLAIN`，确认成员范围、token 聚合、tracking 和用户关系投影使用既有索引。
 
-### 3. 成员低价合同审计
+### 阶段 2：只读查询、分组与页面
 
-- [x] `AuditMemberContractsJob` 独立于旧 `AuditContractsJob`，只处理 `finished` 的 `item_exchange` / `auction`。
-- [x] 仅当 `price < 5,000,000.00` 才记录；`price = 5,000,000.00` 不记录，`reward` 不参与门槛，违规金额使用两位小数的 `price` decimal 值。
-- [x] `contract_details.price` 经 PDO 可能返回 PHP float；查询层以 `CAST(cd.price AS DECIMAL(20, 2)) AS price_decimal` 提供低价判断与落库金额，保留 PHP 层对 float 的拒绝，并且不把内部投影写入合同原始快照。
-- [x] 仅 issuer / acceptor 做成员 XOR；每份命中合同只写一条 `member_contracts` violation，物品字段为 NULL，完整 `contract_items` 保存到 details。
-- [x] 以 `(discovered_at, contract_id)` cursor 配合十分钟 overlap 读取延迟同步合同；`discovered_at` 是 `MAX(character_contracts.updated_at)` 的映射发现时间，只用于来源排序与推进，不读取合同业务内容。正式 cursor 只单调推进，来源键负责 overlap 去重。
+- [x] 已新增脱敏读取服务：仅 `SELECT` 显式字段，限制 `refresh_tokens` 仅读取 `character_id`、`user_id` 与 `deleted_at`；未创建 SeAT token Eloquent Model，也不输出原始行。
+- [x] 已新增 UTC 时间值对象和分组服务：处理三态、主/子角色、独立未绑定成员、状态/关键词/30-60 天筛选、确定性排序与按账号组分页。
+- [x] 已新增只读 `SeatTokenAuditController`、GET 路由和侧边栏「令牌审查」入口；未修改既有 1.0/2.0 页面和扫描逻辑。
+- [x] 已实现范例风格的独立表格：四个状态标签、搜索、每页组数、分页、主角色分组、头像、状态图标、角色概览头衔、技能占位、入团/最后上线时间。
 
-### 4. 入口与浏览
+### 阶段 3：验证与文档
 
-- [x] `seat:audit:scan --type` 支持 `wallet`、`contracts`、`donations`、`member-contracts`、`all`；`all` 按 wallet → contracts → donations → member-contracts 执行。
-- [x] `--since` 保持为旧 `contracts` 的临时回扫参数，不影响新军团审计 cursor 或 `audit_from`。
-- [x] 新增「军团审计」侧边栏、路由、Controller 与视图，仅查询 `98588384` 的 `isk_donations` / `member_contracts`，提供类型、时间范围和分页；admin 可从当前标签通过受 CSRF 与权限保护的 POST 异步提交对应扫描任务。
-- [x] 旧 `ViolationController`、旧「违规记录」、旧 CSV 没有扩展到新类型，避免混用旧/新白名单语义。
+- [ ] 覆盖三态、主/子角色分组、主角色不在当前军团、未绑定独立组、30/60 天临界、空/无效/未来时间、筛选与组分页。
+- [ ] 验证页面不产生数据库写入、不派发 Job、不调用 ESI/SSO，且不会在 HTML、日志或异常中泄露 token/scope。
+- [ ] 在 README 固化经验证的 schema contract、三态规则、只读边界、UTC 规则、技能占位和 SeAT 升级后的 preflight 要求。
 
-## 发布前待验证
+## 后续阶段（不属于 2.1）
 
-> 本机没有 PHP 可执行程序；以下项目尚未验证，不能宣称已通过。
-
-- [x] 本机没有 PHP；已将本次修改的 20 个 PHP 文件临时上传至测试服务器 `/tmp/seat-audit-monitor-lint-2ae270e7` 执行 PHP 8.4.21 的 `php -l`，全部通过。命令以 `trap` 在退出时清理该临时目录，未写入 SeAT 部署目录或数据库。
-- [x] 已执行 `git diff --check`，未发现补丁空白错误；Windows 工作区仅报告既有 LF/CRLF 转换提示。
-- [x] 已在测试服务器只读确认：`contract_details` 不含 `updated_at`，`character_contracts` 具有 `created_at` / `updated_at` 映射时间字段；PHP 8.4.21 / Laravel 10.50.2 可用。
-- [x] 已在测试服务器只读验证聚合查询：6,891 份映射合同中 1,041 份存在多条角色映射，`MAX(character_contracts.updated_at)` 能收敛为每合同一个发现位置；5,262 份符合基础完成合同条件。同一 `discovered_at` 存在多份合同，因此 `(discovered_at, contract_id)` 分页消歧是必要的；`EXPLAIN` 显示当前 8,024 条关联行会使用临时表与 filesort，未在本轮新增索引。
-- [x] 已在**测试服务器**验证 `character_contracts.updated_at` 聚合来源、成员合同 cursor 与十分钟 overlap；真实合同 `#234305678` 通过 `seat:audit:scan --type=member-contracts` 写入一条 `member_contracts` violation，金额为 `0.00`。Horizon 已优雅重启并由 Supervisor 的 `seat-horizon` 接管新进程。
-- [x] 已在测试服务器完成既有 migration、设置 `enabled` 与 `audit_from`，并确认实际成员合同扫描可运行。
-- [ ] Donation 镜像/XOR/外部方白名单仍需进行一次完整真实落库对账；如需验证成员合同来源键重复扫描的幂等性，应以单独受控扫描与 SQL 计数核验。
-- [ ] 回归旧钱包与监控物品合同：确认旧命令、旧列表和旧 CSV 的类型范围、金额和白名单语义均未变化。
-- [ ] 历史漏报补录决策：`audit_from` 是首次扫描起点，正常增量只读取 cursor 后来源与十分钟 overlap。若要补齐修复 `price` float 问题前已被 cursor 越过的合同，必须先统计预计新增记录，再取得明确授权执行受控补扫；不得直接手工插入 violation 或无范围回退 cursor。
-
-## 后续阶段（不属于本轮）
-
-- [ ] 令牌审查：参考用户提供的正常 / 过期 / 未绑定范例，另行确定数据源与页面行为。
-- [ ] 审计军团配置页面、历史成员资格、多军团支持。
-- [ ] 军团审计详情 modal、CSV 导出、Unknown 实体的专用 ESI 解析。
+- [ ] 技能列表数据与展示。
+- [ ] 令牌 scope 检查、手动/定时令牌有效性验证。
+- [ ] 最后地点、CSV 导出、详情 modal。
+- [ ] 多军团配置与历史成员资格。
