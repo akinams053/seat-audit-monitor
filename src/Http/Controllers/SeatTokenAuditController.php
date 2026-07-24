@@ -16,6 +16,7 @@ final class SeatTokenAuditController extends Controller
 {
     private const ALLOWED_STATUSES = ['all', 'normal', 'expired', 'unbound'];
     private const ALLOWED_LAST_SEEN_FILTERS = ['all', 'within_30', 'within_60'];
+    private const ALLOWED_JOINED_WITHIN_FILTERS = ['all', 'within_30', 'within_60'];
     private const ALLOWED_PER_PAGE = [10, 25, 50, 100];
 
     /**
@@ -33,7 +34,10 @@ final class SeatTokenAuditController extends Controller
         }
 
         $status = $this->allowedValue((string) request('status', 'all'), self::ALLOWED_STATUSES, 'all');
+        // last_seen 沿用既有 URL 参数，筛选数据源在读取服务中改为 character_onlines.last_login。
         $lastSeen = $this->allowedValue((string) request('last_seen', 'all'), self::ALLOWED_LAST_SEEN_FILTERS, 'all');
+        // 入团范围与最后上线独立组合，非法参数必须回退为全部，避免用户输入产生不可预测的筛选结果。
+        $joinedWithin = $this->allowedValue((string) request('joined_within', 'all'), self::ALLOWED_JOINED_WITHIN_FILTERS, 'all');
         $perPage = $this->allowedPerPage(request('per_page'));
         $page = max(1, (int) request('page', 1));
         $search = $this->limitSearch((string) request('q', ''));
@@ -41,16 +45,17 @@ final class SeatTokenAuditController extends Controller
         // 审查基准固定为本次 HTTP 请求开始时的 UTC；同一页所有角色使用同一个基准，避免跨午夜边界不一致。
         $characters = $readService->readCurrentMembers(CarbonImmutable::now('UTC'));
         $statusCounts = $groupingService->statusCounts($characters);
-        $groups = $groupingService->filterAndGroup($characters, $status, $lastSeen, $search);
+        $groups = $groupingService->filterAndGroup($characters, $status, $lastSeen, $joinedWithin, $search);
 
         // 以账号组分页而非按角色分页，保证主/子角色列表不会在相邻页面失去其分组标题。
         $totalGroups = count($groups);
         $pageGroups = array_slice($groups, ($page - 1) * $perPage, $perPage);
         $paginationParameters = [
-            'status'    => $status,
-            'last_seen' => $lastSeen,
-            'q'         => $search,
-            'per_page'  => $perPage,
+            'status'        => $status,
+            'last_seen'     => $lastSeen,
+            'joined_within' => $joinedWithin,
+            'q'             => $search,
+            'per_page'      => $perPage,
         ];
         $auditGroups = (new LengthAwarePaginator(
             $pageGroups,
@@ -74,16 +79,23 @@ final class SeatTokenAuditController extends Controller
             'within_30' => '30 天内上线',
             'within_60' => '60 天内上线',
         ];
+        $joinedWithinLabels = [
+            'all'       => '全部入团时间',
+            'within_30' => '30 天内入团',
+            'within_60' => '60 天内入团',
+        ];
 
         return view('seat-audit-monitor::token-audit.index', compact(
             'auditGroups',
             'status',
             'lastSeen',
+            'joinedWithin',
             'search',
             'perPage',
             'statusCounts',
             'statusLabels',
             'lastSeenLabels',
+            'joinedWithinLabels',
         ));
     }
 

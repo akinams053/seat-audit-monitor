@@ -18,6 +18,8 @@ final class SeatTokenAuditReadService
      *
      * 成员资格只能来自 corporation_members；refresh_tokens 仅提供 character_id、user_id、deleted_at
      * 三个脱敏字段来判断状态和 SeAT 用户关系。查询绝不选择 token、refresh_token、scopes 或 expires_on。
+     * 入团时间来自 corporation_member_trackings.start_date，
+     * 最后上线来自 character_onlines.last_login，绝不能误用成员追踪表的 logoff_date。
      * character_infos.title 已由 SeAT 角色概览源码确认是概览「头衔」字段，和 $character->titles
      * 对应的 corporation_member_titles 权限头衔列表不是同一业务概念。
      *
@@ -37,6 +39,8 @@ final class SeatTokenAuditReadService
                 $join->on('cmt.corporation_id', '=', 'cm.corporation_id')
                     ->on('cmt.character_id', '=', 'cm.character_id');
             })
+            // character_onlines 以 character_id 为主键；LEFT JOIN 保留没有上线记录的当前成员。
+            ->leftJoin('character_onlines as co', 'co.character_id', '=', 'cm.character_id')
             // 主角色可能不在当前军团，但仍需作为 SeAT 用户分组标题；只补齐它的公开名称，不把它加入成员行。
             ->leftJoin('character_infos as primary_ci', 'primary_ci.character_id', '=', 'u.main_character_id')
             ->leftJoin('universe_names as primary_un', function ($join) {
@@ -54,8 +58,10 @@ final class SeatTokenAuditReadService
                 'rt.deleted_at as token_deleted_at',
                 'u.main_character_id',
                 DB::raw("COALESCE(NULLIF(primary_ci.name, CHAR(0)), NULLIF(primary_un.name, CHAR(0)), CONCAT('Unknown #', u.main_character_id)) AS primary_character_name"),
+                // tracking 仅用于入团时间；其 logoff_date 不是最后上线数据源。
                 'cmt.start_date',
-                'cmt.logoff_date',
+                // last_login 是 SeAT 已同步的最后上线时间；不读取 online/logins 等本阶段未展示字段。
+                'co.last_login',
             ])
             ->orderBy('cm.character_id')
             ->get()
@@ -85,7 +91,7 @@ final class SeatTokenAuditReadService
             primaryCharacterId: $primaryCharacterId,
             primaryCharacterName: $primaryCharacterName === '' ? null : $primaryCharacterName,
             joinedAt: UtcRelativeTime::from($row->start_date ?? null, $asOf),
-            lastLogoffAt: UtcRelativeTime::from($row->logoff_date ?? null, $asOf),
+            lastLoginAt: UtcRelativeTime::from($row->last_login ?? null, $asOf),
         );
     }
 

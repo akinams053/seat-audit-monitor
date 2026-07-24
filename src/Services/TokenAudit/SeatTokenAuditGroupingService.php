@@ -38,9 +38,10 @@ final class SeatTokenAuditGroupingService
      * @param array<int, TokenAuditCharacter> $characters
      * @param 'all'|'normal'|'expired'|'unbound' $status
      * @param 'all'|'within_30'|'within_60' $lastSeen
+     * @param 'all'|'within_30'|'within_60' $joinedWithin
      * @return array<int, TokenAuditGroup>
      */
-    public function filterAndGroup(array $characters, string $status, string $lastSeen, string $search): array
+    public function filterAndGroup(array $characters, string $status, string $lastSeen, string $joinedWithin, string $search): array
     {
         /** @var array<string, array{primary_id: ?int, primary_name: string, characters: array<int, TokenAuditCharacter>}> $groupRows */
         $groupRows = [];
@@ -48,6 +49,7 @@ final class SeatTokenAuditGroupingService
         foreach ($characters as $character) {
             if (! $this->matchesStatus($character, $status)
                 || ! $this->matchesLastSeen($character, $lastSeen)
+                || ! $this->matchesJoinedWithin($character, $joinedWithin)
                 || ! $this->matchesSearch($character, $search)) {
                 continue;
             }
@@ -132,10 +134,27 @@ final class SeatTokenAuditGroupingService
     /** @param 'all'|'within_30'|'within_60' $lastSeen */
     private function matchesLastSeen(TokenAuditCharacter $character, string $lastSeen): bool
     {
-        return match ($lastSeen) {
-            'within_30' => $character->lastLogoffAt->band === 'within_30',
+        // 最后上线唯一使用 character_onlines.last_login；不能回退到成员追踪表的 logoff_date。
+        return $this->matchesTimeBand($character->lastLoginAt->band, $lastSeen);
+    }
+
+    /** @param 'all'|'within_30'|'within_60' $joinedWithin */
+    private function matchesJoinedWithin(TokenAuditCharacter $character, string $joinedWithin): bool
+    {
+        return $this->matchesTimeBand($character->joinedAt->band, $joinedWithin);
+    }
+
+    /**
+     * 将 UTC 时间值对象的离散区间应用到“最近 N 天内”的用户筛选。
+     *
+     * @param 'all'|'within_30'|'within_60' $filter
+     */
+    private function matchesTimeBand(string $band, string $filter): bool
+    {
+        return match ($filter) {
+            'within_30' => $band === 'within_30',
             // 60 天内包含 30 天内，按用户选择的“最近 N 天”直觉处理，而不是只显示第 31 至 60 天。
-            'within_60' => in_array($character->lastLogoffAt->band, ['within_30', 'within_60'], true),
+            'within_60' => in_array($band, ['within_30', 'within_60'], true),
             default => true,
         };
     }

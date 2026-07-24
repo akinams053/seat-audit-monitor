@@ -1,7 +1,7 @@
 <?php
 
 // src/Services/TokenAudit/Dto/UtcRelativeTime.php
-// 将 SeAT 的 UTC 追踪时间转换为页面可安全展示的相对时间及筛选元数据。
+// 将 SeAT 已存储的 UTC 时间转换为页面可安全展示的相对时间及筛选元数据。
 
 namespace Seat\SeatAuditMonitor\Services\TokenAudit\Dto;
 
@@ -21,7 +21,7 @@ final class UtcRelativeTime
     /**
      * 统一按 UTC 自然日计算时间段，避免 PHP 服务器时区或浏览器时区影响 30/60 天筛选边界。
      *
-     * 空值、无效值和未来值均保留为明确的展示状态；它们不能被误判为近期上线记录。
+     * 空值、无效值和未来值均保留为明确的展示状态；它们不能被误判为近期的入团或上线记录。
      */
     public static function from(mixed $value, CarbonImmutable $asOf): self
     {

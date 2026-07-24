@@ -18,8 +18,10 @@ final class TokenAuditCharacter
         public readonly ?int $seatUserId,
         public readonly ?int $primaryCharacterId,
         public readonly ?string $primaryCharacterName,
+        // 入团时间仍来自成员追踪表；空值与异常值由 UtcRelativeTime 显式表达。
         public readonly UtcRelativeTime $joinedAt,
-        public readonly UtcRelativeTime $lastLogoffAt,
+        // 最后上线唯一来自 SeAT character_onlines.last_login，不能误用成员追踪表的 logoff_date。
+        public readonly UtcRelativeTime $lastLoginAt,
     ) {
     }
 
