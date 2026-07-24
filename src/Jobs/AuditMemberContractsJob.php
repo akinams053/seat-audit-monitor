@@ -22,6 +22,7 @@ use Seat\SeatAuditMonitor\Models\AuditCursor;
 use Seat\SeatAuditMonitor\Repositories\CursorRepository;
 use Seat\SeatAuditMonitor\Services\Audit\EntitySnapshot;
 use Seat\SeatAuditMonitor\Services\Audit\EntitySnapshotResolver;
+use Seat\SeatAuditMonitor\Services\Audit\ScanProgressStore;
 use Seat\SeatAuditMonitor\Services\Audit\SourceEventKeyFactory;
 use Seat\SeatAuditMonitor\Services\Audit\ViolationWriter;
 
@@ -33,12 +34,23 @@ class AuditMemberContractsJob implements ShouldQueue
     private const CHUNK_SIZE = 500;
     private const PRICE_THRESHOLD_CENTS = '500000000';
 
+    /**
+     * scanToken 只用于浏览器一次性完成提示；没有 token 的命令行入口不依赖 Cache。
+     */
+    public function __construct(
+        private readonly ?string $scanToken = null,
+    ) {
+    }
+
     public function handle(
         CursorRepository $cursorRepository,
         EntitySnapshotResolver $entitySnapshotResolver,
+        ScanProgressStore $scanProgressStore,
         SourceEventKeyFactory $sourceEventKeyFactory,
         ViolationWriter $violationWriter,
     ): void {
+        $scanProgressStore->markRunning($this->scanToken);
+
         $auditCorporation = AuditCorporation::query()
             ->where('corporation_id', self::AUDIT_CORPORATION_ID)
             ->first();
@@ -48,6 +60,13 @@ class AuditMemberContractsJob implements ShouldQueue
             || ! $auditCorporation->enabled
             || ! $auditCorporation->audit_contracts
             || $auditCorporation->audit_from === null) {
+            // 状态 API 只消费固定原因码，完整诊断保留在服务器日志，避免向浏览器返回内部配置详情。
+            $scanProgressStore->markSkipped($this->scanToken, match (true) {
+                $auditCorporation === null => 'audit_corporation_not_configured',
+                ! $auditCorporation->enabled => 'audit_disabled',
+                ! $auditCorporation->audit_contracts => 'audit_type_disabled',
+                default => 'audit_from_missing',
+            });
             Log::warning('[seat-audit:member-contracts] 跳过扫描：98588384 未配置、未启用、未开启合同审计或缺少 audit_from。');
 
             return;
@@ -62,6 +81,7 @@ class AuditMemberContractsJob implements ShouldQueue
         );
         if ($memberIds === []) {
             // 空名册时绝不推进 cursor，避免成员同步故障造成不可逆漏审。
+            $scanProgressStore->markSkipped($this->scanToken, 'member_roster_empty');
             Log::warning('[seat-audit:member-contracts] 跳过扫描：98588384 当前成员名册为空，未推进 cursor。');
 
             return;
@@ -98,8 +118,8 @@ class AuditMemberContractsJob implements ShouldQueue
         });
 
         while (true) {
-            /** @var array{discovered_at: string, contract_id: int}|null $nextPosition */
-            $nextPosition = DB::transaction(function () use (
+            /** @var array{position: array{discovered_at: string, contract_id: int}, inserted: int}|null $batchResult */
+            $batchResult = DB::transaction(function () use (
                 $cursorRepository,
                 $entitySnapshotResolver,
                 $sourceEventKeyFactory,
@@ -132,7 +152,7 @@ class AuditMemberContractsJob implements ShouldQueue
                     sourceEventKeyFactory: $sourceEventKeyFactory,
                 );
 
-                $violationWriter->insertOrIgnore($violations);
+                $writeResult = $violationWriter->insertOrIgnore($violations);
                 $lastContract = $contracts[array_key_last($contracts)];
                 $position = [
                     'discovered_at' => CarbonImmutable::parse($lastContract->discovered_at)->toDateTimeString(),
@@ -146,17 +166,33 @@ class AuditMemberContractsJob implements ShouldQueue
                     $position['contract_id'],
                 );
 
-                return $position;
+                return [
+                    'position' => $position,
+                    'inserted' => $writeResult->inserted,
+                ];
             });
 
-            if ($nextPosition === null) {
+            if ($batchResult === null) {
+                $scanProgressStore->markSucceeded($this->scanToken);
+
                 return;
             }
 
+            // 事务成功提交后才更新体验层进度；缓存失败不改变 cursor 或违规记录的正确性。
+            $scanProgressStore->recordBatch($this->scanToken, $batchResult['inserted']);
+
             // 无论本批合同是否命中低价规则，都继续使用其末尾来源位置读取下一批；否则 overlap
             // 内的大量无关合同可能使扫描永久停在同一段来源数据。
-            $readAfterPosition = $nextPosition;
+            $readAfterPosition = $batchResult['position'];
         }
+    }
+
+    /**
+     * 队列重试全部耗尽时才标记失败，避免一次可重试的暂时错误使浏览器过早显示终态。
+     */
+    public function failed(\Throwable $exception): void
+    {
+        app(ScanProgressStore::class)->markFailed($this->scanToken);
     }
 
     /**

@@ -21,6 +21,12 @@ Route::group([
     // 固定军团 98588384 的 2.0 审计列表；页面扫描会异步入队，避免在 Web 请求内同步处理来源数据。
     Route::get('/corporation-audit', 'CorporationAuditController@index')
         ->name('seat-audit.corporation-audit.index');
+    // 当前军团审计标签和日期范围的流式 CSV 导出；Controller 内继续校验 view 权限。
+    Route::get('/corporation-audit/export', 'CorporationAuditController@export')
+        ->name('seat-audit.corporation-audit.export');
+    // 浏览器轮询一次性 Cache 进度，不读取 Job payload、日志或敏感来源数据。
+    Route::get('/corporation-audit/scan-status/{token}', 'CorporationAuditController@scanStatus')
+        ->name('seat-audit.corporation-audit.scan-status');
     Route::post('/corporation-audit/scan', 'CorporationAuditController@scan')
         ->name('seat-audit.corporation-audit.scan');
 

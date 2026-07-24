@@ -21,8 +21,8 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **类型筛选** — 按审计类型（钱包/合同）+ 时间区间 + 通用关键词（角色名/军团名/ticker 任一命中）组合筛选；零金额合同 UI 灰底标识
 - **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
-- **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
-- **手动扫描** — 旧钱包/监控物品合同保留原 Web 扫描入口；军团审计页可按当前标签异步提交 ISK 捐赠或成员低价合同扫描，Artisan 仍可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
+- **CSV 导出** — 违规记录与军团审计均支持按当前筛选流式导出 CSV，Excel/WPS 可直接打开；外部文本均防护公式注入
+- **手动扫描** — 旧钱包/监控物品合同保留原 Web 扫描入口；军团审计页可按当前标签异步提交 ISK 捐赠或成员低价合同扫描，浏览器在任务结束后自动刷新并提示结果；Artisan 仍可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
 - **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口同时解析**角色名 + 当前所属军团 + 军团名字**并回写本地缓存（`universe_names` + `character_affiliations`），或 Artisan `seat:audit:resolve-unknown-names`
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
@@ -36,7 +36,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **成员与白名单规则**：以当前 `corporation_members(corporation_id=98588384)` 做成员 XOR；成员→外部为 `outbound`、外部→成员为 `inbound`，内部或外部双方交易跳过。新规则只对**外部方**应用角色/军团白名单，Unknown 外部实体不会被自动豁免。
 - **启用前提**：migration 的初始配置默认停用。部署前须人工把 `seat_audit_corporations` 中 `corporation_id=98588384` 的 `enabled` 设为真，并设置实际业务生效时间 `audit_from`；所有事件仍须晚于或等于该时间。
 - **独立进度与幂等**：旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用 `seat_audit_scan_cursors`。成员合同以 `MAX(character_contracts.updated_at)` 聚合为 `discovered_at`，仅用于发现来源与 cursor；`date_completed` 仍是业务时间和 `audit_from` 判断依据。`audit_from` 是首次扫描允许追溯的起点，不是每次扫描的全量范围；cursor 建立后只读取新来源及向前十分钟 overlap。每批将写入和 cursor 推进置于同一事务，`source_event_key` 唯一索引防止镜像、重试和 overlap 重复写入。若修复曾导致 cursor 已越过的历史漏报，必须通过受控补扫处理，不能期待正常增量扫描自动补录。
-- **独立审计入口**：侧边栏「军团审计」以「ISK 捐赠」和「成员低价合同」标签分别显示两类 2.0 记录；admin 可从当前标签异步提交扫描。页面日期只过滤已入库结果，不改变 `audit_from` 或 cursor 的实际扫描范围；运行 Web 扫描前必须确保 SeAT 的 queue worker / Horizon 正常运行。旧「违规记录」与 CSV 仍只显示 1.0 的钱包/监控物品合同，避免混用两套白名单语义。
+- **独立审计入口与导出**：侧边栏「军团审计」以「ISK 捐赠」和「成员低价合同」标签分别显示两类 2.0 记录；具有 admin 权限的用户可从当前标签异步提交扫描。提交后页面以 30 分钟短 TTL 的共享 Cache 轮询本次任务状态，显示排队/批次/新增数，并在成功、跳过或最终失败后自动刷新一次并提示结果；它不提供跨页面或跨管理员的 Job 去重，使用者仍应等待本次结果而不要重复点击。Cache 被清理或过期时只会失去页面跟踪，不影响 Job、cursor 或已入库数据。具有 view 权限的用户可导出当前标签和日期范围内的全部 2.0 记录；导出不分页、不混入旧 1.0 数据、不输出 `details` JSON，并以流式 CSV、UTF-8 BOM 和 Excel/WPS 公式注入防护输出。页面日期只过滤已入库结果，不改变 `audit_from` 或 cursor 的实际扫描范围；运行 Web 扫描前必须确保 SeAT 的 queue worker / Horizon 与共享 Cache 正常运行。
 
 测试服务器已完成 2.0 migration、PHP 语法、队列/Horizon 与真实成员低价合同扫描验证：合同 `#234305678` 已写入一条 `member_contracts` 违规，金额为 `0.00`，并确认内部 `price_decimal` 投影不会混入 `details.contract` 快照。当前已知待处理事项是：如需补录修复前被 cursor 越过的历史合同，须先统计范围并执行受控补扫；ISK 捐赠完整落库验证与旧 1.0 审计回归仍应按 [`todo.md`](todo.md) 继续执行。
 
@@ -305,7 +305,9 @@ sudo -u www-data php artisan config:clear
 
 **旧 1.0 Web 界面**：违规记录页右上角下拉选择审计类型（全部 / 仅钱包 / 仅合同），点击 **立即审查**（需 admin 权限）。
 
-**军团审计 Web 界面**：在「军团审计」页顶部切换 **ISK 捐赠** / **成员低价合同** 标签；admin 点击当前标签旁的扫描按钮后，任务会异步加入队列。页面会立即提示“已提交”，并非扫描已经完成；待 Horizon / queue worker 执行完成后刷新页面查看结果。页面日期筛选仅影响显示结果，不会改变 `audit_from` 或 cursor 的实际扫描范围。
+**军团审计 Web 界面**：在「军团审计」页顶部切换 **ISK 捐赠** / **成员低价合同** 标签；admin 点击当前标签旁的扫描按钮后，任务会异步加入队列。页面会立即提示“已提交，请勿重复点击”，并通过共享 Cache 每 3 秒轮询排队/处理进度；任务成功、跳过或最终失败后会自动刷新一次并显示提示。浏览器页面关闭、Cache 过期或 Cache 被清理时不影响后台 Job，只是页面无法继续跟踪该次任务，届时应手动刷新查看记录。该体验层不阻止多个页面或管理员重复投递扫描。页面日期筛选仅影响显示结果，不会改变 `audit_from` 或 cursor 的实际扫描范围。
+
+**军团审计 CSV**：具有 view 权限的用户可在当前标签旁点击 **导出 CSV**，下载该审计类型和当前日期范围内的全部结果，不受页面 50 条分页限制。导出包含成员/外部方、方向、金额、来源引用或 Contract ID、军团 ID 快照与发生时间；不包含 `details` JSON，且所有单元格均防护 Excel/WPS 公式注入。
 
 **命令行**：
 ```bash
