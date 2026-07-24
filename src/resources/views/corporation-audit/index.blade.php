@@ -1,5 +1,5 @@
 {{-- src/resources/views/corporation-audit/index.blade.php --}}
-{{-- 固定军团 98588384 的 2.0 只读审计列表；不复用旧物品违规页面的白名单软过滤 --}}
+{{-- 固定军团 98588384 的 2.0 审计结果页：标签只筛选已入库记录，扫描按钮仅异步提交当前类型任务。 --}}
 
 @extends('web::layouts.grids.12')
 
@@ -9,48 +9,87 @@
 <div class="row">
     <div class="col-12">
         <div class="card mb-3">
-            <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-shield-alt"></i> 军团审计</h3>
+            <div class="card-header d-flex p-0 with-border">
+                <h3 class="card-title p-3 mb-0"><i class="fas fa-shield-alt"></i> 军团审计</h3>
+                <ul class="nav nav-pills ml-auto p-2">
+                    @foreach($allowedAuditTypes as $type)
+                        @php
+                            // 标签链接保留日期过滤，但不保留页码；切换类型后应从新类型的第一页开始显示。
+                            $tabParameters = array_filter([
+                                'audit_type' => $type,
+                                'start_date' => $startDate,
+                                'end_date'   => $endDate,
+                            ]);
+                        @endphp
+                        <li class="nav-item">
+                            <a href="{{ route('seat-audit.corporation-audit.index', $tabParameters) }}"
+                               class="nav-link {{ $auditType === $type ? 'active' : '' }}"
+                               @if($auditType === $type) aria-current="page" @endif>
+                                {{ $auditTypeLabels[$type] }}
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
             </div>
             <div class="card-body">
+                @if(session('success'))
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        {{ session('success') }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="关闭"><span aria-hidden="true">&times;</span></button>
+                    </div>
+                @endif
+                @if(session('error'))
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        {{ session('error') }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="关闭"><span aria-hidden="true">&times;</span></button>
+                    </div>
+                @endif
+
                 <p class="text-muted small mb-3">
-                    审计范围：军团 <code>98588384</code> 的当前成员与外部方之间的 ISK 捐赠及低价已完成合同。
-                    白名单已在扫描入库时仅对外部方生效。
+                    审计范围：军团 <code>98588384</code> 的当前成员与外部方之间的 {{ $auditTypeLabels[$auditType] }}。
+                    日期仅筛选已入库记录；管理员点击扫描后，任务将按 <code>audit_from</code> 与 cursor 异步增量执行。
                 </p>
-                <form method="GET" action="{{ route('seat-audit.corporation-audit.index') }}" class="form-inline">
-                    <div class="form-group mr-3">
-                        <label for="audit_type" class="mr-2">审计类型</label>
-                        <select id="audit_type" name="audit_type" class="form-control form-control-sm">
-                            <option value="all" @selected($auditType === 'all')>全部</option>
-                            @foreach($auditTypeLabels as $type => $label)
-                                @if($type !== 'all')
-                                    <option value="{{ $type }}" @selected($auditType === $type)>{{ $label }}</option>
-                                @endif
-                            @endforeach
-                        </select>
-                    </div>
-                    <div class="form-group mr-3">
-                        <label for="start_date" class="mr-2">开始日期</label>
-                        <input type="date" id="start_date" name="start_date" class="form-control form-control-sm" value="{{ $startDate ?? '' }}">
-                    </div>
-                    <div class="form-group mr-3">
-                        <label for="end_date" class="mr-2">结束日期</label>
-                        <input type="date" id="end_date" name="end_date" class="form-control form-control-sm" value="{{ $endDate ?? '' }}">
-                    </div>
-                    <button type="submit" class="btn btn-sm btn-primary mr-2"><i class="fas fa-search"></i> 筛选</button>
-                    <a href="{{ route('seat-audit.corporation-audit.index') }}" class="btn btn-sm btn-secondary"><i class="fas fa-times"></i> 清除</a>
-                </form>
+
+                <div class="d-flex flex-wrap align-items-center">
+                    <form method="GET" action="{{ route('seat-audit.corporation-audit.index') }}" class="form-inline mr-2 mb-2">
+                        {{-- 保持当前标签；日期表单只改变展示范围，绝不改变实际扫描的 cursor 或 audit_from。 --}}
+                        <input type="hidden" name="audit_type" value="{{ $auditType }}">
+                        <div class="form-group mr-3">
+                            <label for="start_date" class="mr-2">开始日期</label>
+                            <input type="date" id="start_date" name="start_date" class="form-control form-control-sm" value="{{ $startDate ?? '' }}">
+                        </div>
+                        <div class="form-group mr-3">
+                            <label for="end_date" class="mr-2">结束日期</label>
+                            <input type="date" id="end_date" name="end_date" class="form-control form-control-sm" value="{{ $endDate ?? '' }}">
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary mr-2"><i class="fas fa-filter"></i> 筛选</button>
+                        <a href="{{ route('seat-audit.corporation-audit.index', ['audit_type' => $auditType]) }}" class="btn btn-sm btn-secondary"><i class="fas fa-times"></i> 清除</a>
+                    </form>
+
+                    @can('seat-audit-monitor.admin')
+                        {{-- 不能嵌套在 GET 筛选表单内；POST + CSRF 使刷新页面不会意外重复提交扫描。 --}}
+                        <form method="POST" action="{{ route('seat-audit.corporation-audit.scan') }}" class="form-inline mb-2 js-corporation-audit-scan">
+                            @csrf
+                            <input type="hidden" name="audit_type" value="{{ $auditType }}">
+                            <input type="hidden" name="start_date" value="{{ $startDate ?? '' }}">
+                            <input type="hidden" name="end_date" value="{{ $endDate ?? '' }}">
+                            <button type="submit" class="btn btn-sm btn-warning" title="仅提交当前标签的异步扫描任务">
+                                <i class="fas fa-play"></i> 扫描{{ $auditTypeLabels[$auditType] }}
+                            </button>
+                        </form>
+                    @endcan
+                </div>
             </div>
         </div>
 
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">审计记录 <small class="text-muted ml-2">共 {{ $violations->total() }} 条</small></h3>
-                <div class="card-tools text-muted small">仅供查看；请使用 <code>seat:audit:scan</code> 手动执行扫描。</div>
+                <h3 class="card-title">{{ $auditTypeLabels[$auditType] }}记录 <small class="text-muted ml-2">共 {{ $violations->total() }} 条</small></h3>
+                <div class="card-tools text-muted small">扫描提交后由队列异步执行；完成后刷新页面查看结果。</div>
             </div>
             <div class="card-body p-0">
                 @if($violations->isEmpty())
-                    <div class="p-3 text-muted">当前筛选条件下暂无军团审计记录。</div>
+                    <div class="p-3 text-muted">当前筛选条件下暂无{{ $auditTypeLabels[$auditType] }}记录。</div>
                 @else
                     <table class="table table-striped table-hover mb-0">
                         <thead>
@@ -105,3 +144,16 @@
     </div>
 </div>
 @stop
+
+@push('javascript')
+<script>
+$(function () {
+    // 仅减少同一浏览器窗口的双击；实际幂等性由 Job 的 cursor 事务与 source_event_key 唯一索引保证。
+    $('.js-corporation-audit-scan').on('submit', function () {
+        var $button = $(this).find('button[type="submit"]');
+        $button.prop('disabled', true)
+            .html('<i class="fas fa-spinner fa-spin"></i> 扫描请求提交中…');
+    });
+});
+</script>
+@endpush

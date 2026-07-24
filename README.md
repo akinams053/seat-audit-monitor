@@ -22,7 +22,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
-- **手动扫描** — Web 界面保留旧钱包/监控物品合同扫描；Artisan 可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
+- **手动扫描** — 旧钱包/监控物品合同保留原 Web 扫描入口；军团审计页可按当前标签异步提交 ISK 捐赠或成员低价合同扫描，Artisan 仍可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
 - **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口同时解析**角色名 + 当前所属军团 + 军团名字**并回写本地缓存（`universe_names` + `character_affiliations`），或 Artisan `seat:audit:resolve-unknown-names`
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
@@ -36,7 +36,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **成员与白名单规则**：以当前 `corporation_members(corporation_id=98588384)` 做成员 XOR；成员→外部为 `outbound`、外部→成员为 `inbound`，内部或外部双方交易跳过。新规则只对**外部方**应用角色/军团白名单，Unknown 外部实体不会被自动豁免。
 - **启用前提**：migration 的初始配置默认停用。部署前须人工把 `seat_audit_corporations` 中 `corporation_id=98588384` 的 `enabled` 设为真，并设置实际业务生效时间 `audit_from`；所有事件仍须晚于或等于该时间。
 - **独立进度与幂等**：旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用 `seat_audit_scan_cursors`。成员合同以 `MAX(character_contracts.updated_at)` 聚合为 `discovered_at`，仅用于发现来源与 cursor；`date_completed` 仍是业务时间和 `audit_from` 判断依据。每批将写入和 cursor 推进置于同一事务，`source_event_key` 唯一索引防止镜像、重试和 overlap 重复写入。
-- **独立只读入口**：侧边栏「军团审计」仅显示两类 2.0 记录；旧「违规记录」与 CSV 仍只显示 1.0 的钱包/监控物品合同，避免混用两套白名单语义。
+- **独立审计入口**：侧边栏「军团审计」以「ISK 捐赠」和「成员低价合同」标签分别显示两类 2.0 记录；admin 可从当前标签异步提交扫描。页面日期只过滤已入库结果，不改变 `audit_from` 或 cursor 的实际扫描范围；运行 Web 扫描前必须确保 SeAT 的 queue worker / Horizon 正常运行。旧「违规记录」与 CSV 仍只显示 1.0 的钱包/监控物品合同，避免混用两套白名单语义。
 
 已在测试服务器只读确认 `contract_details` 不含 `updated_at`，而 `character_contracts` 具有映射时间字段；聚合查询、同一发现时间的合同 ID 分页边界和执行计划已完成只读核验。PHP 语法、migration 与真实数据扫描仍未验收；部署前应按 [`todo.md`](todo.md) 中的最小验证步骤执行。
 
@@ -289,7 +289,9 @@ sudo -u www-data php artisan config:clear
 
 ### 5. 触发审计扫描
 
-**Web 界面**：违规记录页右上角下拉选择审计类型（全部 / 仅钱包 / 仅合同），点击 **立即审查**（需 admin 权限）。
+**旧 1.0 Web 界面**：违规记录页右上角下拉选择审计类型（全部 / 仅钱包 / 仅合同），点击 **立即审查**（需 admin 权限）。
+
+**军团审计 Web 界面**：在「军团审计」页顶部切换 **ISK 捐赠** / **成员低价合同** 标签；admin 点击当前标签旁的扫描按钮后，任务会异步加入队列。页面会立即提示“已提交”，并非扫描已经完成；待 Horizon / queue worker 执行完成后刷新页面查看结果。页面日期筛选仅影响显示结果，不会改变 `audit_from` 或 cursor 的实际扫描范围。
 
 **命令行**：
 ```bash
