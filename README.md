@@ -32,13 +32,13 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 当前 `feature/corporation-audit-2.0` 分支将 2.0 审计范围固定为 EVE corporation **`98588384`**，审计其**扫描执行时的当前成员名册**与外部方之间的交易；不管理多军团，也不推断历史入退团关系。
 
 - **ISK 捐赠**：读取 `character_wallet_journals.ref_type=player_donation`。同一 donation 的正负镜像共享 journal `id`，规范化后只写一条；donor/recipient 始终是 `first_party_id → second_party_id`，不根据金额正负交换方向。
-- **成员低价合同**：只审 `finished` 的 `item_exchange` / `auction`，且 `price < 5,000,000.00`；`reward` 不参与阈值，命中记录的金额固定为 `price`，每份合同最多写一条，并保存完整 `contract_items` 快照。合同业务字段来自 `contract_details`，物品来自 `contract_items`。
+- **成员低价合同**：只审 `finished` 的 `item_exchange` / `auction`，且 `price < 5,000,000.00`；`reward` 不参与阈值，命中记录的金额固定为 `price`，每份合同最多写一条，并保存完整 `contract_items` 快照。合同业务字段来自 `contract_details`，物品来自 `contract_items`；低价判断额外在 MariaDB 中将 `price` 投影为 `DECIMAL(20, 2)`，避免 PDO 将原始字段返回为 PHP float 而产生金额精度误判。
 - **成员与白名单规则**：以当前 `corporation_members(corporation_id=98588384)` 做成员 XOR；成员→外部为 `outbound`、外部→成员为 `inbound`，内部或外部双方交易跳过。新规则只对**外部方**应用角色/军团白名单，Unknown 外部实体不会被自动豁免。
 - **启用前提**：migration 的初始配置默认停用。部署前须人工把 `seat_audit_corporations` 中 `corporation_id=98588384` 的 `enabled` 设为真，并设置实际业务生效时间 `audit_from`；所有事件仍须晚于或等于该时间。
-- **独立进度与幂等**：旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用 `seat_audit_scan_cursors`。成员合同以 `MAX(character_contracts.updated_at)` 聚合为 `discovered_at`，仅用于发现来源与 cursor；`date_completed` 仍是业务时间和 `audit_from` 判断依据。每批将写入和 cursor 推进置于同一事务，`source_event_key` 唯一索引防止镜像、重试和 overlap 重复写入。
+- **独立进度与幂等**：旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用 `seat_audit_scan_cursors`。成员合同以 `MAX(character_contracts.updated_at)` 聚合为 `discovered_at`，仅用于发现来源与 cursor；`date_completed` 仍是业务时间和 `audit_from` 判断依据。`audit_from` 是首次扫描允许追溯的起点，不是每次扫描的全量范围；cursor 建立后只读取新来源及向前十分钟 overlap。每批将写入和 cursor 推进置于同一事务，`source_event_key` 唯一索引防止镜像、重试和 overlap 重复写入。若修复曾导致 cursor 已越过的历史漏报，必须通过受控补扫处理，不能期待正常增量扫描自动补录。
 - **独立审计入口**：侧边栏「军团审计」以「ISK 捐赠」和「成员低价合同」标签分别显示两类 2.0 记录；admin 可从当前标签异步提交扫描。页面日期只过滤已入库结果，不改变 `audit_from` 或 cursor 的实际扫描范围；运行 Web 扫描前必须确保 SeAT 的 queue worker / Horizon 正常运行。旧「违规记录」与 CSV 仍只显示 1.0 的钱包/监控物品合同，避免混用两套白名单语义。
 
-已在测试服务器只读确认 `contract_details` 不含 `updated_at`，而 `character_contracts` 具有映射时间字段；聚合查询、同一发现时间的合同 ID 分页边界和执行计划已完成只读核验。PHP 语法、migration 与真实数据扫描仍未验收；部署前应按 [`todo.md`](todo.md) 中的最小验证步骤执行。
+测试服务器已完成 2.0 migration、PHP 语法、队列/Horizon 与真实成员低价合同扫描验证：合同 `#234305678` 已写入一条 `member_contracts` 违规，金额为 `0.00`，并确认内部 `price_decimal` 投影不会混入 `details.contract` 快照。当前已知待处理事项是：如需补录修复前被 cursor 越过的历史合同，须先统计范围并执行受控补扫；ISK 捐赠完整落库验证与旧 1.0 审计回归仍应按 [`todo.md`](todo.md) 继续执行。
 
 ## 环境要求
 
@@ -310,7 +310,7 @@ sudo -u www-data php artisan seat:audit:scan --type=donations
 sudo -u www-data php artisan seat:audit:scan --type=member-contracts
 ```
 
-旧钱包/监控物品合同基于 `seat_audit_status` 增量执行；两类军团审计使用独立 cursor，并要求配置已启用且已人工设置 `audit_from`。所有类型都依赖来源键唯一索引防止重复记录。
+旧钱包/监控物品合同基于 `seat_audit_status` 增量执行；两类军团审计使用独立 cursor，并要求配置已启用且已人工设置 `audit_from`。`audit_from` 仅决定首次扫描允许读取的最早业务时间，后续正常扫描只处理 cursor 之后的新来源和十分钟 overlap；所有类型都依赖来源键唯一索引防止重复记录。
 
 ### 5.5 解析外部角色名（Unknown ID）
 

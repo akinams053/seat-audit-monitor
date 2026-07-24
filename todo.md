@@ -2,7 +2,7 @@
 
 > 范围：在不改变 1.0 市场交易/监控物品合同审计的前提下，为 EVE corporation `98588384` 增加成员与外部方之间的 ISK 捐赠、成员低价合同审计。
 >
-> 本轮明确不做：多受审军团管理、历史成员资格、Web 扫描、`--dry-run`、新页面 CSV/详情 modal、令牌审查。令牌状态能力属于后续阶段。
+> 本轮明确不做：多受审军团管理、历史成员资格、`--dry-run`、新页面 CSV/详情 modal、令牌审查。军团审计 Web 页面已支持按当前标签异步提交扫描；令牌状态能力属于后续阶段。
 
 ## 已确定的业务口径
 
@@ -32,7 +32,8 @@
 ### 3. 成员低价合同审计
 
 - [x] `AuditMemberContractsJob` 独立于旧 `AuditContractsJob`，只处理 `finished` 的 `item_exchange` / `auction`。
-- [x] 仅当 `price < 5,000,000.00` 才记录；`price = 5,000,000.00` 不记录，`reward` 不参与门槛，违规金额使用原始 `price`。
+- [x] 仅当 `price < 5,000,000.00` 才记录；`price = 5,000,000.00` 不记录，`reward` 不参与门槛，违规金额使用两位小数的 `price` decimal 值。
+- [x] `contract_details.price` 经 PDO 可能返回 PHP float；查询层以 `CAST(cd.price AS DECIMAL(20, 2)) AS price_decimal` 提供低价判断与落库金额，保留 PHP 层对 float 的拒绝，并且不把内部投影写入合同原始快照。
 - [x] 仅 issuer / acceptor 做成员 XOR；每份命中合同只写一条 `member_contracts` violation，物品字段为 NULL，完整 `contract_items` 保存到 details。
 - [x] 以 `(discovered_at, contract_id)` cursor 配合十分钟 overlap 读取延迟同步合同；`discovered_at` 是 `MAX(character_contracts.updated_at)` 的映射发现时间，只用于来源排序与推进，不读取合同业务内容。正式 cursor 只单调推进，来源键负责 overlap 去重。
 
@@ -40,7 +41,7 @@
 
 - [x] `seat:audit:scan --type` 支持 `wallet`、`contracts`、`donations`、`member-contracts`、`all`；`all` 按 wallet → contracts → donations → member-contracts 执行。
 - [x] `--since` 保持为旧 `contracts` 的临时回扫参数，不影响新军团审计 cursor 或 `audit_from`。
-- [x] 新增只读「军团审计」侧边栏、路由、Controller 与视图，仅查询 `98588384` 的 `isk_donations` / `member_contracts`，提供类型、时间范围和分页。
+- [x] 新增「军团审计」侧边栏、路由、Controller 与视图，仅查询 `98588384` 的 `isk_donations` / `member_contracts`，提供类型、时间范围和分页；admin 可从当前标签通过受 CSRF 与权限保护的 POST 异步提交对应扫描任务。
 - [x] 旧 `ViolationController`、旧「违规记录」、旧 CSV 没有扩展到新类型，避免混用旧/新白名单语义。
 
 ## 发布前待验证
@@ -51,10 +52,11 @@
 - [x] 已执行 `git diff --check`，未发现补丁空白错误；Windows 工作区仅报告既有 LF/CRLF 转换提示。
 - [x] 已在测试服务器只读确认：`contract_details` 不含 `updated_at`，`character_contracts` 具有 `created_at` / `updated_at` 映射时间字段；PHP 8.4.21 / Laravel 10.50.2 可用。
 - [x] 已在测试服务器只读验证聚合查询：6,891 份映射合同中 1,041 份存在多条角色映射，`MAX(character_contracts.updated_at)` 能收敛为每合同一个发现位置；5,262 份符合基础完成合同条件。同一 `discovered_at` 存在多份合同，因此 `(discovered_at, contract_id)` 分页消歧是必要的；`EXPLAIN` 显示当前 8,024 条关联行会使用临时表与 filesort，未在本轮新增索引。
-- [ ] 在**测试服务器**继续只读确认 `character_contracts.updated_at` 的实际更新语义；在获得写操作授权后的真实扫描中验证十分钟 overlap、cursor 单调推进和来源键幂等。连接前必须重新获得用户对测试环境的授权。
-- [ ] 获得单独写操作授权后，以 migration `--pretend` 验证升级路径；不得直接迁移、设置 `enabled`、写入 `audit_from` 或真实扫描。
-- [ ] 获得单独写操作授权后，分别执行新审计并 SQL 对账：Donation 镜像/XOR/白名单，合同 `price < 5,000,000.00` / `reward` / 完整 items / overlap 幂等。
+- [x] 已在**测试服务器**验证 `character_contracts.updated_at` 聚合来源、成员合同 cursor 与十分钟 overlap；真实合同 `#234305678` 通过 `seat:audit:scan --type=member-contracts` 写入一条 `member_contracts` violation，金额为 `0.00`。Horizon 已优雅重启并由 Supervisor 的 `seat-horizon` 接管新进程。
+- [x] 已在测试服务器完成既有 migration、设置 `enabled` 与 `audit_from`，并确认实际成员合同扫描可运行。
+- [ ] Donation 镜像/XOR/外部方白名单仍需进行一次完整真实落库对账；如需验证成员合同来源键重复扫描的幂等性，应以单独受控扫描与 SQL 计数核验。
 - [ ] 回归旧钱包与监控物品合同：确认旧命令、旧列表和旧 CSV 的类型范围、金额和白名单语义均未变化。
+- [ ] 历史漏报补录决策：`audit_from` 是首次扫描起点，正常增量只读取 cursor 后来源与十分钟 overlap。若要补齐修复 `price` float 问题前已被 cursor 越过的合同，必须先统计预计新增记录，再取得明确授权执行受控补扫；不得直接手工插入 violation 或无范围回退 cursor。
 
 ## 后续阶段（不属于本轮）
 
