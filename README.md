@@ -71,8 +71,8 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 ```bash
 cd /var/www/seat
 
-# 安装稳定分支（main，含合同审计）
-sudo -u www-data composer require akinams053/seat-audit-monitor:dev-main
+# 安装正式版 2.1（含军团审计、令牌审查与 CSV 导出）
+sudo -u www-data composer require akinams053/seat-audit-monitor:2.1 --update-with-dependencies
 
 # 执行数据库迁移（首次安装会建 4 张基础表 + 2 张合同审计扩展表）
 sudo -u www-data php artisan migrate
@@ -150,9 +150,29 @@ sudo -u www-data php artisan route:clear && \
 sudo -u www-data php artisan view:clear
 ```
 
+### 正式版 2.1 升级
+
+正式标签 `2.1` 包含军团审查 2.0、令牌审查 2.1，以及军团审计扫描完成自动刷新与 CSV 导出。**已经完成 2.0 migration 的实例**（包括此前安装 `dev-feature/corporation-audit-2.0` 开发版的实例）可按以下步骤升级；本次只更新 PHP、Blade、路由和 Cache 进度逻辑，**不需要再次执行 migration，也不要手动触发扫描**：
+
+```bash
+cd /var/www/seat
+
+# 1. 将 Composer 依赖从开发分支或旧正式版本切换到正式 2.1 标签
+sudo -u www-data composer require \
+  akinams053/seat-audit-monitor:2.1 \
+  --update-with-dependencies
+
+# 2. 让 Web 与 queue worker 后续加载新的配置、路由和 Blade
+sudo -u www-data php artisan config:clear
+sudo -u www-data php artisan route:clear
+sudo -u www-data php artisan view:clear
+```
+
+升级后保持 queue worker / Horizon 与 Web 使用同一个共享 Cache（生产环境通常为 Redis），再通过「军团审计」页面提交一次扫描验收自动刷新和 CSV。若实例尚未安装 2.0 基础设施，必须先按下方开发分支升级流程预览并执行插件 migration；不要因为升级到 2.1 而跳过旧版本所缺的 migration。
+
 ### 军团审查 2.0 / 令牌审查 2.1 开发分支升级
 
-`feature/corporation-audit-2.0` 分支同时包含军团审查 2.0 与令牌审查 2.1。首次从旧版本升级到 2.0 时，建议先预览插件 migration，再执行实际迁移；已经完成 2.0 migration、仅更新 2.1 页面或 CSV 导出时，只需 Composer 更新并清理缓存，**不需要再次执行 migration**：
+`feature/corporation-audit-2.0` 分支保留给尚未发布的后续开发验证。首次从旧版本升级到 2.0 时，建议先预览插件 migration，再执行实际迁移；已经完成 2.0 migration、仅验证开发中页面或 CSV 改动时，只需 Composer 更新并清理缓存，**不需要再次执行 migration**：
 
 ```bash
 cd /var/www/seat
@@ -176,7 +196,7 @@ sudo -u www-data php artisan route:clear
 sudo -u www-data php artisan view:clear
 ```
 
-2.0 基础设施新增 6 个 migration：受审军团配置、初始军团配置、复合扫描游标、违规表扩展、历史来源事件键回填、来源事件键唯一索引。回填 migration 不删除历史重复行；只有每组最早记录获得规范键，其余历史行保留 `source_event_key=NULL`。迁移日志会输出 scanned / backfilled / duplicates / unresolved 统计。令牌审查 2.1（含 CSV 导出）不新增 migration。
+2.0 基础设施新增 6 个 migration：受审军团配置、初始军团配置、复合扫描游标、违规表扩展、历史来源事件键回填、来源事件键唯一索引。回填 migration 不删除历史重复行；只有每组最早记录获得规范键，其余历史行保留 `source_event_key=NULL`。迁移日志会输出 scanned / backfilled / duplicates / unresolved 统计。令牌审查 2.1、军团审计的自动刷新与 CSV 导出均不新增 migration。
 
 ### 升级验证
 
