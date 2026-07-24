@@ -14,36 +14,38 @@
 - **依赖**：`eveseat/services: ^5.0`。
 
 ## 2. 核心数据源 (Data Sources)
-审计逻辑仅针对以下 SeAT 原生表进行增量扫描：
-- **市场交易表**：`character_wallet_transactions`
+审计和只读展示仅使用以下 SeAT 原生表；后台扫描器必须按策略使用增量 cursor，不能把展示页查询改造成扫描或 ESI 调用。
+
+- **旧 1.0 市场交易**：`character_wallet_transactions`
     - 关键字段：`id`, `character_id`, `type_id`, `is_buy`, `unit_price`, `quantity`, `date`。
-    - 其他字段：`transaction_id`, `location_id`, `client_id`, `is_personal`, `journal_ref_id`。
-    - 判定条件：`is_buy === 0`（卖出）且 `type_id` 匹配监控名单。
-- **合同主表**：`contract_details`
-    - 关键字段：`contract_id` (PK), `issuer_id`, `assignee_id`, `acceptor_id`, `type`, `status`, `price`, `reward`, `date_completed`, `title`。
-    - 判定条件：`status='finished'` 且 `type IN ('item_exchange','auction')` 且 issuer/assignee/acceptor 均不在白名单。
-- **合同物品表**：`contract_items`
-    - 关键字段：`record_id` (PK), `contract_id` (FK), `type_id`, `quantity`, `is_included`。
-    - 注意：`character_contracts` 仅是 character↔contract 的关联映射，**不含合同业务字段**，不要查它取合同内容。
-- **角色信息表**：`character_infos`
-    - 用于获取角色名：通过 `character_id` 查询 `name` 字段。
-- **SDE 物品表**：`invTypes`
-    - 用于根据 `typeID` 查询 `typeName`（物品名称自动补全）。
+    - 仅判定 `is_buy === 0`（卖出）且 `type_id` 命中监控名单。
+- **旧 1.0 监控物品合同**：`contract_details` + `contract_items`
+    - `contract_details` 取合同业务字段；`contract_items` 取物品明细。仅审 `finished` 的 `item_exchange` / `auction`。
+    - `character_contracts` 在旧 1.0 中不含合同业务字段，不能用它读取合同内容。
+- **军团审查 2.0 ISK Donation**：`character_wallet_journals`
+    - 仅处理 `ref_type='player_donation'`；以 `first_party_id → second_party_id` 固定捐赠方向，镜像 journal 必须归并。
+- **军团审查 2.0 成员低价合同**：`character_contracts` + `contract_details` + `contract_items`
+    - `character_contracts` 只用于发现成员关联合同及其 `updated_at` cursor；合同业务字段仍必须来自 `contract_details`，完整物品快照来自 `contract_items`。
+- **当前成员范围**：`corporation_members`
+    - 固定受审军团 `98588384` 的扫描时当前成员名册是成员 XOR 的唯一依据；不推断历史入团/退团。
+- **名称、军团和物品补全**：`character_infos`、`character_affiliations`、`corporation_infos`、`universe_names` 与 SDE `invTypes`。
+- **令牌审查只读投影**：`corporation_members`、`refresh_tokens`、`users`、`character_infos`、`universe_names`、`corporation_member_trackings`、`character_onlines`。
+    - `refresh_tokens` 仅允许选择 `character_id`、`user_id`、`deleted_at`；禁止读取 token、refresh token、scope、JWT 或 `expires_on`。
 
 ## 3. 数据库结构 (Schema)
 表前缀：`seat_audit_`
-- `seat_audit_monitor_items`：监控物品列表 (id, type_id, item_name)。
-- `seat_audit_whitelist`：**角色**豁免名单 (id, character_id, character_name)。钱包+合同审计均生效。
-- `seat_audit_corporation_whitelist`：**军团**豁免名单 (id, corporation_id, corporation_name)。**仅合同审计生效**（钱包审计的对方是市场撮合系统，无军团概念）。
-- `seat_audit_status`：记录增量水位线 (id, audit_type, last_id, **last_completed_at**)。
-    - `last_id`：钱包交易审计用（按记录 id 推进）。
-    - `last_completed_at`：合同审计用（按 `date_completed` 推进，DATETIME NULL）。
-- **seat_audit_violations (违规记录表)**：
-    - 必须存储快照信息：`id`, `character_id`, `character_name`（**发起方**角色名快照）, `type_id`, `item_name`（物品名）, `amount`（金额）, `violation_time`（违规发生时间）, `details`（JSON 原始数据），`created_at`。
-    - **审计类型字段**：`audit_type` VARCHAR(50) NOT NULL DEFAULT `'wallet_transactions'`，可能值 `wallet_transactions` / `contracts`。
-    - **合同 ID 字段**：`contract_id` BIGINT UNSIGNED NULL（仅 `audit_type='contracts'` 时非空，便于按合同聚合追溯）。
-    - **接收方快照字段**：`counterparty_id` BIGINT UNSIGNED NULL + `counterparty_name` VARCHAR NULL。合同：`counterparty_id=acceptor_id`、`counterparty_name=acceptor 名`；钱包：`counterparty_id=NULL`、`counterparty_name='市场'`。`counterparty_id` 加独立索引，用于和 `character_id` 一起 LEFT JOIN `seat_audit_whitelist` 做查询层软过滤。
-    - **合同可见性字段**：`contract_availability` VARCHAR(20) NULL。合同行写入 `contract_details.availability`（public/personal/corporation/alliance）；钱包行 NULL。UI「来源」列据此细分 badge。
+- `seat_audit_monitor_items`：旧 1.0 共用监控物品列表 (`id`, `type_id`, `item_name`)。
+- `seat_audit_whitelist`：角色豁免名单；旧钱包/合同采用既有语义，军团审查 2.0 仅对**外部方**应用。
+- `seat_audit_corporation_whitelist`：军团豁免名单；旧合同的双方军团 AND 豁免语义不变，军团审查 2.0 同样只对外部方应用。
+- `seat_audit_status`：旧 1.0 水位线。钱包按 `last_id`，监控物品合同按 `last_completed_at` 推进。
+- `seat_audit_corporations`：受审军团配置；`corporation_id` 唯一，`enabled` 控制扫描，`audit_donations` / `audit_contracts` 可独立开关，`audit_from` 是首次扫描允许读取的最早业务时间。当前固定配置为 `98588384`。
+- `seat_audit_scan_cursors`：军团审查 2.0 的独立 cursor；以 `(scanner, audit_corporation_id)` 唯一，保存时间、主/次 ID cursor 与开始/成功时间。正常扫描允许十分钟 overlap，但不得倒退正式 cursor。
+- **`seat_audit_violations`（违规快照表）**：
+    - 共用快照包含 `character_id`、`character_name`、`amount`、`violation_time`、`details`、`created_at`；`type_id` 与 `item_name` 对 ISK Donation、整份成员合同允许为 NULL，不得伪造物品数据。
+    - `audit_type` 的持久化值为 `wallet_transactions`、`contracts`、`isk_donations`、`member_contracts`。
+    - 旧合同继续使用 `contract_id`、`counterparty_id`、`counterparty_name`、`contract_availability` 等字段，且白名单查询层软过滤保持既有语义。
+    - 军团审查 2.0 使用 `source_event_key`（64 位 SHA-256，唯一索引幂等）、`source_reference`、`audit_corporation_id`、`member_character_id`、`external_party_id`、`external_party_type`、`direction` 以及双方军团 ID 快照字段。
+    - 写入和 cursor 推进必须在同一事务内完成；重试、镜像事件或 overlap 命中重复 `source_event_key` 时必须被安全忽略。
 
 ## 4. 核心审计逻辑 (Audit Logic)
 
@@ -85,12 +87,19 @@
     - `details.item` 含 type_id/quantity/is_included/record_id/record_ids
     - `details.parties` 含 issuer_name/assignee_name/acceptor_name
 
-### 4.3 排除项 (共用)
-- **当前阶段不记录任何来自钱包日志 (`character_wallet_journals`) 的捐赠/直接 trade 记录**。
-- 直接 trade（站内 trade 窗口）在 journal 有 entry 但无物品级明细（无 type_id），物理上无法审计——这是已知盲区。
-- 合同的 courier/loan 类型不审（物品所有权未转移）。
+### 4.3 军团审查 2.0（固定军团）
+- **范围**：仅审 `corporation_members(corporation_id=98588384)` 在扫描执行时的当前成员与外部方之间的事件。成员 XOR 成立才记录；成员→外部为 `outbound`，外部→成员为 `inbound`，内部互转和纯外部事件均跳过。
+- **ISK Donation**：仅审 `character_wallet_journals.ref_type='player_donation'`；以 `first_party_id → second_party_id` 固定方向，正负镜像归并为单一事件。角色/军团白名单只检查外部方，Unknown 外部实体不能自动豁免。
+- **成员低价合同**：仅审 `finished` 的 `item_exchange` / `auction`，且 `price < 5,000,000.00`；`reward` 不参与阈值，金额固定写入 `price`，每份合同最多一条 violation，并保留完整 `contract_items` 快照。低价判定必须使用 MariaDB 的 `DECIMAL(20, 2)` 投影，避免 PDO float 精度误判。
+- **进度与补扫**：Donation / 成员合同分别使用 `seat_audit_scan_cursors`，`audit_from` 仅约束首次扫描的最早业务时间；cursor 建立后只读取新来源与十分钟 overlap。若修复发现历史 cursor 已越过的漏报，必须采用受控补扫，不能期待常规增量扫描自动回填。
 
-### 4.4 白名单查询层软过滤
+### 4.4 排除项 (共用)
+- 直接 trade（站内 trade 窗口）即使在 journal 有 entry，也没有物品级 `type_id` 明细；旧物品审计无法物理判定，仍是已知盲区。
+- 旧 1.0 钱包/监控物品合同审计不记录 Donation；但固定军团 2.0 已审计 `player_donation`，不得把两种策略混为一谈。
+- 合同的 `courier` / `loan` 类型不审，因为物品所有权未转移。
+
+
+### 4.5 旧违规记录白名单查询层软过滤
 - **生效位置**：仅在 `ViolationController::index` / `::export` 查询时（即 UI 列表和 CSV 导出），不影响 Job 的扫描入库逻辑。
 - **豁免语义**（两套白名单不同）：
     - 钱包行：发起方 `character_id` 在角色白名单 → 豁免（军团白名单不参与）。
@@ -117,8 +126,8 @@
 
 ### 5.3 权限
 - 通过 `registerPermissions()` 注册，scope 为 `seat-audit-monitor`。
-- `seat-audit-monitor.view`：查看违规记录。
-- `seat-audit-monitor.admin`：管理监控物品与白名单。
+- `seat-audit-monitor.view`：查看旧违规记录、军团审查、令牌审查，并导出三类页面的 CSV。
+- `seat-audit-monitor.admin`：管理监控物品与白名单、提交旧 1.0 或军团审查扫描、解析未知来源；令牌审查仍不因 admin 权限而读取或探测授权秘密。
 
 ### 5.4 侧边栏
 - 通过 `mergeConfigFrom()` 合并到 `package.sidebar` 配置键。
@@ -128,16 +137,15 @@
 - 路由 `namespace` 参数在 Laravel 10 中仍可用但非必需，控制器可使用完整类名。
 
 ## 6. 开发约束
-- **性能优先**：后台扫描器使用 `DB::table()` 直接查询。
-- **UI 规范**：违规记录列表需直观显示发起方/发起方军团/接收方/接收方军团/物品/金额/来源/合同详情/时间。
-    - 双方军团通过 `character_affiliations` JOIN `corporation_infos` 实时拿（当前 affiliation 语义），UI 显示 ticker、hover 显示全名。
-    - 外部军团（不在 SeAT `corporation_infos`）通过 LEFT JOIN `universe_names` 兜底，COALESCE 优先 corporation_infos 再 universe_names。
-    - 「来源」列按 `audit_type` + `contract_availability` 细分：钱包 / 合同·公开 / 合同·私人 / 合同·军团 / 合同·联盟。
-    - 通用关键词搜索框模糊匹配 character_name / counterparty_name / 双方 corporation_infos.name+ticker / 双方 universe_names.name 任一命中。
-    - 「合同详情」列：合同行的 Contract ID 渲染为可点击按钮（btn-outline-primary 样式，显示 `#contract_id`），触发 modal 显示完整合同/物品/三方角色快照（数据源自 `details` JSON）。
-- **权限**：
-    - `seat-audit-monitor.view`：查看违规记录、导出 CSV。
-    - `seat-audit-monitor.admin`：管理监控物品、管理白名单、手动触发扫描、ESI 解析未知名字。
+- **性能优先**：后台扫描器使用 `DB::table()` 直接查询，批量预加载并避免 N+1；军团审查的写入与 cursor 推进必须处于同一事务。
+- **旧违规记录 UI**：需显示发起方/双方当前军团/接收方/物品/金额/来源/合同详情/时间；双方军团以 `character_affiliations` JOIN `corporation_infos` 为主、`universe_names` 为兜底，保持当前 affiliation 语义。来源按 `audit_type` 与 `contract_availability` 细分，合同 ID 可打开 `details` JSON 快照 modal。
+- **军团审查 UI**：Donation 与成员低价合同必须分 tab 展示和导出；admin 可异步提交当前标签扫描，页面仅以短 TTL 共享 Cache 显示本次任务状态，不能依赖 Cache 保证 Job 去重。日期筛选仅过滤已入库结果，不能修改 `audit_from` 或 cursor。
+- **令牌审查 UI 与安全边界**：
+    - 页面和 CSV 只能是 GET 只读链路：不写库、不派发 Job、不调用 ESI/SSO、不刷新或验证 token。
+    - 绝不读取、渲染、导出或记录 token、refresh token、scope、JWT、`expires_on`、SeAT 内部 user ID 或 group key；`refresh_tokens` 仅可作三态存在性投影。
+    - 三种时间字段不可互换：已加入=`corporation_member_trackings.start_date`，最后上线=`character_onlines.last_login`，最后离线=`corporation_member_trackings.logoff_date`。三者不是实时在线状态或 token 有效性结论。
+    - 状态、关键词和三种时间均在角色级 AND 筛选；30/60 天按 UTC 自然日，60 天内必须包含 30 天内。随后按 SeAT 用户主角色分组和分页；主角色是否属于军团范围必须按完整成员名册判断，不能使用筛选后的显示行。
+    - CSV 导出当前角色级筛选命中的全部记录而非当前分页；必须使用流式输出、UTF-8 BOM 和 Excel/WPS 公式注入防护。
 
 ## 7. SSH 调试（测试 / 生产环境）
 
@@ -189,11 +197,12 @@ scripts/ssh-seat 'sudo tail -n 200 /var/www/seat/storage/logs/laravel.log'
 ```
 
 ## 8. 扩展规划 (Roadmap)
-当前已支持：市场交易审计 (wallet_transactions)、合同审计 (contracts)、角色白名单 OR 单方拦截 + 军团白名单 AND 双方豁免、外部角色 + 当前军团 ESI 批量解析（`ResolveUnknownNamesJob` / `seat:audit:resolve-unknown-names` / UI「解析未知来源」按钮，同时 UPSERT `universe_names` + `character_affiliations`）、白名单加入支持 ESI 精确名字查找外部角色（`/api/characters/esi`）。后续可考虑:
-- **联盟白名单**：当前已支持角色 + 军团两级白名单。合同的 `assignee_id` 可能是 alliance ID，跨联盟合同仍可能绕过。可扩展为三级白名单或统一 entity_type 模型。
-- **assignee 字段成列**：当前 `assignee_id` 仅在 `details` JSON 内，软过滤无法覆盖"白名单事后新增 assignee-only 角色"的边角场景。可考虑在 violations 表加 `assignee_id` 快照列。
-- **钱包日志 (Donation) 审计**：直接 ISK 转账（`ref_type='player_donation'`）目前不审，可作为新审计类型加入；技术上需要新的 `AuditDonationsJob` + `audit_type='donations'` 水位线。
-- **合同金额按 LP 价值核算**：当前 `amount = max(price, reward)`，零金额合同 amount=0。可引入 LP 价格表或 evepraisal 估值，把零金额合同的物品市场价合算进 amount。
-- **ESI 解析定时化**：当前需手动触发。可加到 SeAT schedule 中每日自动跑。
-- **军团 ticker 兜底**：外部军团仅靠 `universe_names` 拿到 name 但没 ticker。可加自建 cache 表存 ticker（来源 `GET /corporations/{id}/`，单调用慢）。
-- **监控名单复用**：`seat_audit_monitor_items` 已跨审计类型共用，无需扩展。
+当前已支持：旧 1.0 市场交易 (`wallet_transactions`) 与监控物品合同 (`contracts`) 审计；固定军团 2.0 的 ISK Donation (`isk_donations`) 与成员低价合同 (`member_contracts`) 审计；角色/军团白名单；外部角色和当前军团 ESI 批量解析；令牌审查的只读三态、分组、入团/最后上线/最后离线时间与 CSV。
+
+后续可考虑：
+- **联盟白名单**：合同的 `assignee_id` 可能是 alliance ID；可扩展为三级白名单或统一 entity_type 模型。
+- **assignee 字段成列**：`assignee_id` 目前只在 `details` JSON 内，查询层软过滤不能覆盖事后新增的 assignee-only 角色。
+- **令牌审查自动化验证**：补齐三态、主/子角色、三种 UTC 时间边界、组合筛选、分页与 CSV 公式注入回归，并在 SeAT 升级后复核最终 JOIN 的 `EXPLAIN`。
+- **令牌审查扩展能力**：技能列表、显式 scope 检查、手动/定时 token 有效性验证、最后地点、详情 modal、多军团配置与历史成员资格；每项必须先单独评审授权安全边界。
+- **合同金额按 LP 价值核算**：为零金额或低金额合同引入可审计的物品估值来源。
+- **ESI 解析定时化与军团 ticker 缓存**：外部军团目前仅有 `universe_names` 名称，若新增 ticker 缓存须控制 ESI 请求速率。

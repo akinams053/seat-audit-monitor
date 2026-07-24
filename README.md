@@ -1,16 +1,16 @@
 # seat-audit-monitor
 
-Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
+Eve SeAT 5.x 经济合规审计与令牌审查插件
 
 ## 项目简介
 
-`seat-audit-monitor` 是一款基于 Eve SeAT 5.x 插件系统的经济合规审计工具。通过增量扫描角色钱包**市场交易**和**合同**记录，自动检测涉及监控物品的可疑行为，帮助联盟管理层进行经济监管。
+`seat-audit-monitor` 是一款基于 Eve SeAT 5.x 插件系统的经济合规审计工具。它保留角色钱包市场交易与监控物品合同的增量审计，同时为固定军团成员提供 ISK Donation、低价合同审查和只读令牌状态审查，帮助联盟管理层进行经济监管。
 
 所有违规记录采用快照存储，不依赖原始数据，确保历史审计数据的完整性和可追溯性。
 
 ## 功能特性
 
-- **双审计源** — 同时审计角色钱包市场交易（卖出受监控物品）与合同（包含受监控物品且双方均不在白名单）
+- **四类审计策略** — 旧 1.0 审计角色钱包市场卖出与监控物品合同；固定军团 2.0 审计成员对外 ISK Donation 与成员低价合同
 - **增量审计** — 基于水位线机制（钱包按 id，合同按 date_completed），每次仅处理新增数据
 - **物品监控** — 自定义监控物品名单，输入 type_id 自动查询物品名称
 - **白名单豁免** — 两级白名单（角色 + 军团），语义不同：
@@ -18,7 +18,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
     - **军团白名单**（内部互转豁免，AND 语义）：仅合同审计生效；发起方军团 AND 接收方军团 都在军团白名单 → 跳过（典型用例：内部主公司加进军团白名单 → 内部成员之间合同豁免，与外部之间的合同仍审计）
     - **白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
 - **违规记录** — 自动记录发起方/接收方角色与军团、物品名、金额、来源类型、合同 ID 等快照信息
-- **类型筛选** — 按审计类型（钱包/合同）+ 时间区间 + 通用关键词（角色名/军团名/ticker 任一命中）组合筛选；零金额合同 UI 灰底标识
+- **类型筛选** — 旧违规记录按钱包/合同、时间区间与通用关键词组合筛选；军团审计按 Donation/成员低价合同标签与日期范围独立筛选；零金额合同 UI 灰底标识
 - **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 违规记录与军团审计均支持按当前筛选流式导出 CSV，Excel/WPS 可直接打开；外部文本均防护公式注入
@@ -27,7 +27,7 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
-## 军团审查 2.0 开发状态
+## 军团审查 2.0（固定军团范围）
 
 当前 `feature/corporation-audit-2.0` 分支将 2.0 审计范围固定为 EVE corporation **`98588384`**，审计其**扫描执行时的当前成员名册**与外部方之间的交易；不管理多军团，也不推断历史入退团关系。
 
@@ -40,9 +40,11 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 
 测试服务器已完成 2.0 migration、PHP 语法、队列/Horizon 与真实成员低价合同扫描验证：合同 `#234305678` 已写入一条 `member_contracts` 违规，金额为 `0.00`，并确认内部 `price_decimal` 投影不会混入 `details.contract` 快照。当前已知待处理事项是：如需补录修复前被 cursor 越过的历史合同，须先统计范围并执行受控补扫；ISK 捐赠完整落库验证与旧 1.0 审计回归仍应按 [`todo.md`](todo.md) 继续执行。
 
-## 令牌审查 2.1
+## 令牌审查 2.1 与开发分支最后离线功能
 
 侧边栏「审计监控 → 令牌审查」提供固定军团 **`98588384`** 的只读 SeAT 状态页面。它不创建插件数据表、不派发 Job、不调用 ESI/SSO，也不会读取、输出或记录 token、refresh token、scope、JWT 或 `expires_on`。
+
+> **发布边界**：正式标签 `2.1` 与 `2.1.1` 包含令牌审查的既有只读能力，但不包含提交 `418f8d8` 新增的「最后离线」列、`last_logoff` 筛选和对应 CSV 列。该功能当前仅在已推送的 `dev-feature/corporation-audit-2.0` 分支中可用；在新的正式标签发布前，需按下方开发分支升级方式安装。测试环境验收不等同于生产部署，生产升级必须另行授权。
 
 - **成员范围**：仅从 `corporation_members(corporation_id=98588384)` 读取当前 SeAT 已同步的成员；没有绑定 SeAT 的成员仍会显示为「无 SeAT 用户」。
 - **令牌三态**：只使用 `refresh_tokens.character_id`、`user_id` 与 `deleted_at`；存在未软删除记录为「状态正常」、仅有已删除记录为「账号过期」、没有记录为「无 SeAT 用户」。这只是 SeAT 本地记录状态，不做实时 token/SSO 有效性探测。
@@ -71,10 +73,10 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 ```bash
 cd /var/www/seat
 
-# 安装正式版 2.1（含军团审计、令牌审查与 CSV 导出）
-sudo -u www-data composer require akinams053/seat-audit-monitor:2.1 --update-with-dependencies
+# 安装最新已发布的正式版 2.1.1（含军团审计、既有令牌审查与 CSV 导出；不含开发分支的最后离线功能）
+sudo -u www-data composer require akinams053/seat-audit-monitor:2.1.1 --update-with-dependencies
 
-# 执行数据库迁移（首次安装会建 4 张基础表 + 2 张合同审计扩展表）
+# 执行插件数据库迁移（首次安装须应用包内全部 migration，包含军团审查基础设施）
 sudo -u www-data php artisan migrate
 
 # 刷新缓存
@@ -82,10 +84,10 @@ sudo -u www-data php artisan config:cache
 sudo -u www-data php artisan route:cache
 ```
 
-> 想试用尚未合入 main 的军团审查 2.0 基础设施分支，必须先确认该分支已经推送到远端，然后使用：
+> 想试用尚未正式发布的军团审查 2.0 后续改动或令牌审查「最后离线」功能，必须先确认该分支已经推送到远端，然后使用：
 > `composer require akinams053/seat-audit-monitor:dev-feature/corporation-audit-2.0 --update-with-dependencies`
 >
-> 同一分支后续更新可执行：
+> 该分支当前包含 `last_logoff` 筛选与最后离线 CSV 列；同一分支后续更新可执行：
 > `composer update akinams053/seat-audit-monitor --with-dependencies`
 >
 > 尚未 push 的本地分支无法被服务器 Composer 拉取；这种情况只能使用上文的本地 path repository 方式。
@@ -150,16 +152,16 @@ sudo -u www-data php artisan route:clear && \
 sudo -u www-data php artisan view:clear
 ```
 
-### 正式版 2.1 升级
+### 正式版 2.1 / 2.1.1 升级
 
-正式标签 `2.1` 包含军团审查 2.0、令牌审查 2.1，以及军团审计扫描完成自动刷新与 CSV 导出。**已经完成 2.0 migration 的实例**（包括此前安装 `dev-feature/corporation-audit-2.0` 开发版的实例）可按以下步骤升级；本次只更新 PHP、Blade、路由和 Cache 进度逻辑，**不需要再次执行 migration，也不要手动触发扫描**：
+正式标签 `2.1` 包含军团审查 2.0、令牌审查既有只读页面，以及军团审计扫描完成自动刷新与 CSV 导出；`2.1.1` 在此基础上修复主角色范围判定，是当前推荐的正式版本。两者均**不包含**提交 `418f8d8` 的最后离线功能。**已经完成 2.0 migration 的实例**（包括此前安装 `dev-feature/corporation-audit-2.0` 开发版的实例）可按以下步骤升级；本次只更新 PHP、Blade、路由和 Cache 进度逻辑，**不需要再次执行 migration，也不要手动触发扫描**：
 
 ```bash
 cd /var/www/seat
 
-# 1. 将 Composer 依赖从开发分支或旧正式版本切换到正式 2.1 标签
+# 1. 将 Composer 依赖从开发分支或旧正式版本切换到推荐的正式 2.1.1 标签
 sudo -u www-data composer require \
-  akinams053/seat-audit-monitor:2.1 \
+  akinams053/seat-audit-monitor:2.1.1 \
   --update-with-dependencies
 
 # 2. 让 Web 与 queue worker 后续加载新的配置、路由和 Blade
@@ -172,7 +174,7 @@ sudo -u www-data php artisan view:clear
 
 ### 军团审查 2.0 / 令牌审查 2.1 开发分支升级
 
-`feature/corporation-audit-2.0` 分支保留给尚未发布的后续开发验证。首次从旧版本升级到 2.0 时，建议先预览插件 migration，再执行实际迁移；已经完成 2.0 migration、仅验证开发中页面或 CSV 改动时，只需 Composer 更新并清理缓存，**不需要再次执行 migration**：
+`feature/corporation-audit-2.0` 分支保留给尚未发布的后续开发验证，当前包含提交 `418f8d8` 的最后离线列、`last_logoff` 筛选和 CSV 列。首次从旧版本升级到 2.0 时，建议先预览插件 migration，再执行实际迁移；已经完成 2.0 migration、仅验证开发中页面或 CSV 改动时，只需 Composer 更新并清理缓存，**不需要再次执行 migration**：
 
 ```bash
 cd /var/www/seat
