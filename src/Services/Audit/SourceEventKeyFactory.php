@@ -28,16 +28,23 @@ final class SourceEventKeyFactory
         ]);
     }
 
+    /**
+     * 构造 ISK 捐赠来源键。
+     *
+     * character_wallet_journals 的原始主键是 (character_id, id)，但测试服务器已确认同一笔
+     * player_donation 的正负镜像共享 id。因此 canonicalDonationId 使用该共享 id，
+     * 同时仍包含审计军团和固定 donor/recipient 方向，保证多军团审查与镜像重试均幂等。
+     */
     public function iskDonation(
         int|string $auditCorporationId,
-        int|string $journalId,
+        int|string $canonicalDonationId,
         int|string $firstPartyId,
         int|string $secondPartyId
     ): string {
         return $this->hash([
             AuditType::IskDonations->value,
             $this->normalizePositiveInteger($auditCorporationId, 'auditCorporationId'),
-            $this->normalizePositiveInteger($journalId, 'journalId'),
+            $this->normalizePositiveInteger($canonicalDonationId, 'canonicalDonationId'),
             $this->normalizePositiveInteger($firstPartyId, 'firstPartyId'),
             $this->normalizePositiveInteger($secondPartyId, 'secondPartyId'),
         ]);

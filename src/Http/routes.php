@@ -18,6 +18,10 @@ Route::group([
     Route::get('/violations', 'ViolationController@index')
         ->name('seat-audit.violations.index');
 
+    // 固定军团 98588384 的 2.0 只读审计列表；扫描仅通过 Artisan 执行，避免 Web 请求超时。
+    Route::get('/corporation-audit', 'CorporationAuditController@index')
+        ->name('seat-audit.corporation-audit.index');
+
     // 手动触发审计扫描（POST 防止意外刷新重复触发）
     Route::post('/violations/scan', 'ViolationController@scan')
         ->name('seat-audit.violations.scan');

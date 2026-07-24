@@ -24,6 +24,12 @@ return [
                 'permission' => 'seat-audit-monitor.view',
             ],
             [
+                'name'       => '军团审计',
+                'icon'       => 'fas fa-shield-alt',
+                'route'      => 'seat-audit.corporation-audit.index',
+                'permission' => 'seat-audit-monitor.view',
+            ],
+            [
                 'name'       => '监控物品',
                 'icon'       => 'fas fa-cog',
                 'route'      => 'seat-audit.admin.items',

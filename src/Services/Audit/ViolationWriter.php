@@ -40,7 +40,7 @@ final class ViolationWriter
     }
 
     /**
-     * 对写入结构做集中校验，防止 INSERT IGNORE 把字段截断等数据错误误判为“重复”。
+     * 对单条写入结构做集中校验，防止 INSERT IGNORE 把字段截断等数据错误误判为“重复”。
      * 金额禁止传入 float，避免大额 ISK 在 PHP 浮点运算中丢失精度。
      *
      * @throws InvalidArgumentException|JsonException

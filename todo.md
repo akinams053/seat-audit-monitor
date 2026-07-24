@@ -1,135 +1,63 @@
-# 军团审查 2.0 — 第一阶段开发计划
+# 军团审查 2.0：固定单军团实施状态
 
-> 目标：保留现有“受监控物品的钱包/合同审计”语义，同时新增“受审军团成员与外部方之间的 ISK 捐赠、低价已完成合同”审计。
+> 范围：在不改变 1.0 市场交易/监控物品合同审计的前提下，为 EVE corporation `98588384` 增加成员与外部方之间的 ISK 捐赠、成员低价合同审计。
 >
-> 本轮仅处理经济交易审计。SeAT 令牌、入团时间、最近上线时间等成员状态能力属于第二阶段，不在本计划实现。
+> 本轮明确不做：多受审军团管理、历史成员资格、Web 扫描、`--dry-run`、新页面 CSV/详情 modal、令牌审查。令牌状态能力属于后续阶段。
 
-## 固定业务边界
+## 已确定的业务口径
 
-- [x] 成员边界以 `corporation_members(corporation_id, character_id)` 的**扫描时当前名册**为准。
-- [x] 每个审计军团使用自己的 `audit_from`；不回扫启用前事件，避免以当前名册误判历史入退团关系。
-- [x] 支持多个审计军团，成员边界分别计算。
-- [x] 新 `member_contracts` 只审 `finished` 的 `item_exchange` / `auction`：`price < 5,000,000` 才记录，等于 5M 不记录，`reward` 不参与门槛；页面主金额为 `price`，详情保留原始 `reward`。
-- [x] 新 `isk_donations` 固定以 `first_party_id → second_party_id` 表示 donor → recipient，金额使用绝对值；不得根据正负镜像交换方向。
-- [x] 新策略只对**外部方**应用角色/军团白名单；受审成员自身命中白名单仍继续审查。
-- [x] 原 `contracts` 始终表示“命中监控物品的合同”，保持既有角色 OR、军团双方 AND 的豁免语义。
-- [x] 外部方可以是角色、军团、联盟或 Unknown 实体；Unknown 不得阻断扫描，后续由 ESI 补全名称。
-- [x] 导出统一使用 UTF-8 BOM 流式 CSV；不在同步 Web 请求中生成 XLSX。
+- [x] **固定军团**：新 2.0 逻辑只处理 `corporation_id=98588384`；不提供多军团选择或配置管理页。
+- [x] **成员边界**：使用扫描执行时 `corporation_members(corporation_id=98588384)` 的当前成员名册；不根据当前名册回推历史入退团。
+- [x] **启用起点**：`audit_from` 由部署时人工设置，且同一配置行必须设置 `enabled=true`；任何新事件均要求发生时间不早于该值。
+- [x] **新白名单**：只检查外部方的角色白名单和当前军团白名单；受审成员本人命中白名单仍参与审计，Unknown 外部方不自动豁免。
+- [x] **兼容性**：1.0 `wallet_transactions` 与 `contracts` 保持原 Job、水位线、金额规则、白名单软过滤、旧列表和 CSV 查询范围不变。
 
-### 已确认的既有勘察信息
+## 已实现
 
-此前在测试服务器的只读勘察中已确认 `character_wallet_journals` 可提供 `player_donation` 的 party、金额、时间与 `(character_id, id)` 唯一标识，且同一捐赠存在正负镜像；`corporation_members` 使用 `(corporation_id, character_id)` 作为成员主键。这些结论仅作为开发输入；在新扫描器部署测试服务器时，以新的只读统计和 SQL 对账复验。
+### 1. 基础数据与幂等写入
 
-## 当前已实现基线
+- [x] 保留已发布的 2.0 migration：`seat_audit_corporations`、`seat_audit_scan_cursors`、violation 扩展字段和 `source_event_key` 唯一索引。
+- [x] 固定 `AuditCorporation::TARGET_CORPORATION_ID = 98588384`，新 cursor 与来源键均使用 EVE corporation ID，而非配置表自增主键。
+- [x] `CursorRepository::lockOrCreateForUpdate()` 通过 `insertOrIgnore()` 后加行锁处理首次扫描并发；来源写入与 cursor 推进可置于同一事务。
+- [x] 旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用独立的 `seat_audit_scan_cursors`。
 
-以下项目已有可定位的 migration 或源码实现，可供后续复用：
+### 2. ISK 捐赠审计
 
-- [x] 2026-07-23 的六个基础设施 migration：受审军团、初始种子、复合扫描游标、违规表扩展、历史来源键回填、来源键唯一索引。
-- [x] `AuditCorporation`、`AuditCursor` 与 `CursorRepository` 已提供受审军团配置、按 `(scanner, audit_corporation_id)` 隔离的游标及行锁/推进能力。
-- [x] 初始军团 `98588384` 的**种子 migration** 已提供，且默认 `enabled=false`；这不代表任何环境已部署、启用或完成扫描。
-- [x] `Violation` 已支持来源键、审计军团、成员/外部方、方向、双方军团快照与允许为空的物品字段。
-- [x] `AuditType` 已集中定义 `wallet_transactions`、`contracts`、`isk_donations`、`member_contracts`，并提供新旧页面的类型分组和中文标签。
-- [x] `SourceEventKeyFactory` 与 `ViolationWriter` 已实现 SHA-256 来源键、`insertOrIgnore()` 幂等写入及 inserted/duplicate 计数。
-- [x] 旧 `AuditWalletTransactionsJob`、`AuditContractsJob` 已接入来源键与 `ViolationWriter`；旧合同 `--since` 回扫不推进原水位线。
-- [x] 旧 `seat_audit_status` 继续保留，旧钱包/合同扫描仍可兼容运行。
+- [x] `AuditDonationsJob` 读取固定配置、当前成员名册和白名单；配置未启用、未设 `audit_from` 或名册为空时安全退出且不推进 cursor。
+- [x] `DonationJournalScanner` 只扫描 `character_wallet_journals.ref_type='player_donation'`。
+- [x] 同一笔正负镜像以共享 journal `id` 作为 canonical ID：单边记录可用，双边镜像必须校验 party、时间、金额、符号和 owner；异常镜像不猜测修正。
+- [x] 固定 `first_party_id → second_party_id` 为 donor → recipient；成员 XOR 决定 `outbound` / `inbound`，内部或无关事件跳过。
+- [x] Donation cursor 使用 `(occurred_at, 最小 owner character_id, canonical journal id)`；`source_event_key` 保护镜像、重试和重复扫描。
 
-### 已知缺口（不得误标为完成）
+### 3. 成员低价合同审计
 
-- [ ] `CursorRepository::GLOBAL_SCOPE = 0` 仅为新 scanner 预留；现有 wallet/contracts Job 仍使用 `seat_audit_status`，尚未迁移到新 cursor。
-- [ ] `AuditType` 已被旧页面的筛选/CSV 分组使用；`AuditScanCommand` 目前仍只支持 `wallet`、`contracts`、`all`，没有 donations/member-contracts、`--corporation` 或 `--dry-run`。
-- [ ] 尚无 `DonationJournalScanner`、成员名册 Provider、运行上下文、统一 `ContractScanner`、新合同 policy、orchestrator 或新 Job。
-- [ ] 尚无审计军团管理页、独立“军团对外审查”页面/CSV，`ResolveUnknownNamesJob` 也未处理两种新类型。
-- [ ] 新 scanner 尚未实现“每个 chunk 的违规写入与 cursor 推进在同一事务提交”；现有 Writer 不代表全部策略已接入。
-- [ ] 现有旧 CSV 虽为响应流和 UTF-8 BOM，但仍有全量读取路径；惰性分块读取和 CSV Formula Injection 防护尚未实现。
-- [ ] 仓库尚未建立自动化测试结构。
+- [x] `AuditMemberContractsJob` 独立于旧 `AuditContractsJob`，只处理 `finished` 的 `item_exchange` / `auction`。
+- [x] 仅当 `price < 5,000,000.00` 才记录；`price = 5,000,000.00` 不记录，`reward` 不参与门槛，违规金额使用原始 `price`。
+- [x] 仅 issuer / acceptor 做成员 XOR；每份命中合同只写一条 `member_contracts` violation，物品字段为 NULL，完整 `contract_items` 保存到 details。
+- [x] 以 `(discovered_at, contract_id)` cursor 配合十分钟 overlap 读取延迟同步合同；`discovered_at` 是 `MAX(character_contracts.updated_at)` 的映射发现时间，只用于来源排序与推进，不读取合同业务内容。正式 cursor 只单调推进，来源键负责 overlap 去重。
 
-关键现有实现：
+### 4. 入口与浏览
 
-- `src/Repositories/CursorRepository.php`
-- `src/Enums/AuditType.php`
-- `src/Services/Audit/SourceEventKeyFactory.php`
-- `src/Services/Audit/ViolationWriter.php`
-- `src/Jobs/AuditWalletTransactionsJob.php`
-- `src/Jobs/AuditContractsJob.php`
-- `src/Console/Commands/AuditScanCommand.php`
+- [x] `seat:audit:scan --type` 支持 `wallet`、`contracts`、`donations`、`member-contracts`、`all`；`all` 按 wallet → contracts → donations → member-contracts 执行。
+- [x] `--since` 保持为旧 `contracts` 的临时回扫参数，不影响新军团审计 cursor 或 `audit_from`。
+- [x] 新增只读「军团审计」侧边栏、路由、Controller 与视图，仅查询 `98588384` 的 `isk_donations` / `member_contracts`，提供类型、时间范围和分页。
+- [x] 旧 `ViolationController`、旧「违规记录」、旧 CSV 没有扩展到新类型，避免混用旧/新白名单语义。
 
----
+## 发布前待验证
 
-## 阶段 A：扫描内核与安全写入
+> 本机没有 PHP 可执行程序；以下项目尚未验证，不能宣称已通过。
 
-### A1. 成员范围与运行上下文
+- [x] 本机没有 PHP；已将本次修改的 20 个 PHP 文件临时上传至测试服务器 `/tmp/seat-audit-monitor-lint-2ae270e7` 执行 PHP 8.4.21 的 `php -l`，全部通过。命令以 `trap` 在退出时清理该临时目录，未写入 SeAT 部署目录或数据库。
+- [x] 已执行 `git diff --check`，未发现补丁空白错误；Windows 工作区仅报告既有 LF/CRLF 转换提示。
+- [x] 已在测试服务器只读确认：`contract_details` 不含 `updated_at`，`character_contracts` 具有 `created_at` / `updated_at` 映射时间字段；PHP 8.4.21 / Laravel 10.50.2 可用。
+- [x] 已在测试服务器只读验证聚合查询：6,891 份映射合同中 1,041 份存在多条角色映射，`MAX(character_contracts.updated_at)` 能收敛为每合同一个发现位置；5,262 份符合基础完成合同条件。同一 `discovered_at` 存在多份合同，因此 `(discovered_at, contract_id)` 分页消歧是必要的；`EXPLAIN` 显示当前 8,024 条关联行会使用临时表与 filesort，未在本轮新增索引。
+- [ ] 在**测试服务器**继续只读确认 `character_contracts.updated_at` 的实际更新语义；在获得写操作授权后的真实扫描中验证十分钟 overlap、cursor 单调推进和来源键幂等。连接前必须重新获得用户对测试环境的授权。
+- [ ] 获得单独写操作授权后，以 migration `--pretend` 验证升级路径；不得直接迁移、设置 `enabled`、写入 `audit_from` 或真实扫描。
+- [ ] 获得单独写操作授权后，分别执行新审计并 SQL 对账：Donation 镜像/XOR/白名单，合同 `price < 5,000,000.00` / `reward` / 完整 items / overlap 幂等。
+- [ ] 回归旧钱包与监控物品合同：确认旧命令、旧列表和旧 CSV 的类型范围、金额和白名单语义均未变化。
 
-- [ ] 新增 `MembershipProvider` 与 `CurrentCorporationMembersProvider`，按审计军团批量读取 `corporation_members`；接口保留事件时间参数，为第二阶段成员历史实现预留替换点。
-- [ ] 新增 `AuditRunContext` / Factory；一次扫描预加载启用军团、各军团成员集合、角色/军团白名单和监控物品。
-- [ ] 新增 `EntitySnapshotResolver`，仅按当前 chunk 的参与方批量解析 `character_infos`、`universe_names`、`character_affiliations`、`corporation_infos`；Unknown 实体保留 ID 并继续扫描。
+## 后续阶段（不属于本轮）
 
-### A2. 来源扫描与策略
-
-- [ ] 实现 `DonationJournalScanner`：只读取 `ref_type='player_donation'`，稳定规范 donor/recipient/绝对金额，并按每个审计军团的成员 XOR 判定 `inbound` / `outbound`；内部和无关事件不记录。
-- [ ] 合并正负镜像，支持单边 journal；使用 `SourceEventKeyFactory::iskDonation()` 与唯一来源键覆盖跨 chunk、重试与回扫去重。
-- [ ] 对 party 缺失、同一 party、零金额、journal 所属角色不在双方或镜像金额不一致的事件计入 invalid 并记录结构化统计，不猜测修正。
-- [ ] 实现统一 `ContractScanner`：每个合同 chunk 只读取一次 `contract_items`，并同时执行旧 `MonitoredItemContractPolicy` 与新 `ExternalMemberContractPolicy`。
-- [ ] 旧策略继续按 `(contract_id, type_id)` 写入；新策略按 `(audit_corporation_id, contract_id)` 仅写一条，保存完整物品列表、合同原始 `price` / `reward` 及成员方向。
-- [ ] 新成员合同只使用 issuer/acceptor 进行成员 XOR 判断；`assignee_id`、`availability`、`issuer_corporation_id`、`is_included` 仅保留在详情，不参与成员资格判定。
-- [ ] 新策略只对白名单外部方豁免；旧 `contracts` 保持历史白名单规则。
-
-### A3. Cursor、运行入口与兼容性
-
-- [ ] 每个 chunk 在一个数据库事务内完成规范化、策略执行、幂等写入与 cursor 推进；失败时 violation 与 cursor 一起回滚。
-- [ ] donation 使用稳定复合 cursor，contract 使用 `updated_at + contract_id`；采用 10 分钟 overlap，并以事件时间和 `audit_from` 作最终业务过滤。
-- [ ] 首次切换合同扫描时，以旧 `seat_audit_status.contracts.last_completed_at` 补齐旧策略后再建立新 cursor；切换完成前不删除旧状态。
-- [ ] 新增 `AuditOrchestrator`、统一扫描结果对象及 `Cache::lock('seat-audit-monitor:scan', ...)`。
-- [ ] 新增 donations 入口，并把 Command 扩展为 `wallet`、`donations`、`contracts`、`member-contracts`、`all`，支持 `--corporation`、`--since`、`--dry-run`；回扫和 dry-run 不推进正式 cursor。
-- [ ] Web 手动扫描改用 orchestrator 返回的统计，不再以全表 count 前后差计算新增数。
-- [ ] 仅在测试服务器对 journal/contract 候选索引执行 `EXPLAIN` 并确认收益后，才决定是否新增 SeAT 源表索引 migration。
-
-阶段 A 完成条件：两种新审计类型可安全扫描；重试、镜像与回扫不会新增重复记录；旧 wallet/contracts 入口和行为保持可用。
-
----
-
-## 阶段 B：管理、查询与导出
-
-- [ ] 新增审计军团管理 Controller 与页面：添加军团、启停、donation/member-contract 策略开关和 `audit_from`；所有管理路由统一执行 `seat-audit-monitor.admin` Gate。
-- [ ] 调整侧边栏为“物品违规审查 / 军团对外审查 / 监控物品 / 白名单”。现有违规页只查询 `wallet_transactions`、`contracts`；新增独立军团审查路由、Controller 和页面，只查询 `isk_donations`、`member_contracts`。
-- [ ] 两页共用实体名称、军团、关键词、时间与白名单查询基础逻辑，但各自使用独立分页参数与严格 audit type scope，禁止记录串页。
-- [ ] 军团审查页展示审计军团、成员/外部方、方向和成员身份口径；提供 Journal 详情，以及含完整 items、`price`、`reward` 和低价规则依据的合同详情。
-- [ ] 扩展 `ResolveUnknownNamesJob`：可补齐新类型的双方实体名称、实体类型与当前 affiliation；ESI 不参与历史成员资格判断。
-- [ ] 保留旧 CSV 兼容性，并新增独立军团审查 CSV。两个导出均复用当前页筛选，以 `streamDownload()` 和 `lazyById` / `chunkById` 分批读取所需字段，不生成同步 XLSX 临时文件。
-- [ ] 对 CSV 中可能以 `=`, `+`, `-`, `@` 开头的文本执行 Formula Injection 防护。
-
-阶段 B 完成条件：新旧审查各自拥有受权限保护的页面、详情与 CSV；筛选范围和导出范围严格一致，且互不串页。
-
----
-
-## 阶段 C：文档、发布与验收
-
-- [ ] 更新 `README.md` 与 `CLAUDE.md`：明确四类审计类型、受审军团管理、调度、dry-run、幂等回扫、当前成员名册口径和第二阶段边界；统一 `isk_donations` 名称。
-- [ ] 补充功能分支部署、Composer 更新、插件 migration 路径、`--pretend`、缓存清理和升级后的验收说明。
-- [ ] 明确 refresh/access token 不能写入日志、CSV 或违规快照。
-
-### 本地最小验证
-
-仅保留低成本、可重复的规则保护；不建立本地 SeAT 大数据 E2E、十万行压测或并行 agent 验证流程。
-
-- [ ] 对修改的 PHP 文件执行语法检查及项目已有的轻量检查。
-- [ ] 建立必要的规则级测试：5M 门槛、成员 XOR、来源键稳定性、镜像幂等、dry-run 不写 violation/cursor。
-- [ ] 对旧 wallet/contracts 执行针对性回归检查，确认没有改变其审计类型、金额或白名单语义。
-
-### 测试服务器验收
-
-部署后再验证真实数据、索引、并发、ESI 与页面交互。每次连接前先明确测试环境；migration、正式扫描或其他写操作仍须单独确认。
-
-1. [ ] 只读统计成员数、捐赠镜像分布、低价合同候选和现有来源键重复；对候选索引执行 `EXPLAIN`。
-2. [ ] 执行插件 migration `--pretend`；获得写操作确认后再执行实际 migration。
-3. [ ] 分别对 donations、member-contracts 运行 dry-run，并以独立 SQL 对账成员 XOR、镜像、`audit_from`、`price < 5,000,000` 与 `reward` 边界。
-4. [ ] 获得写操作确认后正式扫描；重复运行相同命令时新增必须为 0，同时确认旧 wallet/contracts 无异常变化。
-5. [ ] 验收新旧页面、筛选、详情、CSV、Unknown resolver 与权限边界；确认 CSV 可由 Excel/WPS 正确打开。
-
-## 完成标准
-
-- [ ] `isk_donations` 与 `member_contracts` 按既定成员边界、白名单和金额规则正确入库。
-- [ ] 多军团、`audit_from`、镜像、重试、回扫与并发不会产生新的重复 violation。
-- [ ] 旧 wallet 和监控物品 contracts 的语义、兼容入口与查询结果不回归。
-- [ ] Command、管理页面、独立新旧列表、详情、Unknown resolver 与 CSV 覆盖各自应支持的审计类型。
-- [ ] CSV 按当前筛选导出，不全量加载、不生成同步 XLSX 临时文件，并已处理公式注入风险。
-- [ ] 测试服务器的 dry-run、正式扫描、SQL 对账和 UI/CSV 验收全部通过。
+- [ ] 令牌审查：参考用户提供的正常 / 过期 / 未绑定范例，另行确定数据源与页面行为。
+- [ ] 审计军团配置页面、历史成员资格、多军团支持。
+- [ ] 军团审计详情 modal、CSV 导出、Unknown 实体的专用 ESI 解析。

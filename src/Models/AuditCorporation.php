@@ -9,6 +9,9 @@ use Seat\Services\Models\ExtensibleModel;
 
 class AuditCorporation extends ExtensibleModel
 {
+    // 当前插件仅审查这一支军团；所有 2.0 cursor、来源键和违规快照均使用此 EVE corporation ID。
+    public const TARGET_CORPORATION_ID = 98588384;
+
     protected $table = 'seat_audit_corporations';
 
     protected $fillable = [

@@ -22,23 +22,23 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 一键导出违规记录（含审计类型 + Contract ID 列），Excel/WPS 直接打开
-- **手动扫描** — Web 界面一键触发（可选审钱包/合同/全部）或 Artisan 命令行 `seat:audit:scan --type=wallet|contracts|all`
+- **手动扫描** — Web 界面保留旧钱包/监控物品合同扫描；Artisan 可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
 - **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口同时解析**角色名 + 当前所属军团 + 军团名字**并回写本地缓存（`universe_names` + `character_affiliations`），或 Artisan `seat:audit:resolve-unknown-names`
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
 ## 军团审查 2.0 开发状态
 
-当前 `feature/corporation-audit-2.0` 分支正在开发“受审军团成员与外部方之间的 ISK 捐赠、低价合同”审查。现阶段已经完成第一批基础设施，但新扫描器和独立页面尚未启用：
+当前 `feature/corporation-audit-2.0` 分支将 2.0 审计范围固定为 EVE corporation **`98588384`**，审计其**扫描执行时的当前成员名册**与外部方之间的交易；不管理多军团，也不推断历史入退团关系。
 
-- 新增可配置的受审军团表 `seat_audit_corporations`，初始军团 `98588384` 默认保持停用。
-- 新增按 `scanner + audit_corporation_id` 隔离的复合游标表 `seat_audit_scan_cursors`，旧水位线表继续保留以支持平滑切换。
-- 扩展违规记录结构，加入 `source_event_key`、审计军团、成员/外部方、方向和双方军团快照字段；`type_id` / `item_name` 允许为空，为纯 ISK 事件预留表达能力。
-- 为可识别的旧钱包和合同记录回填 SHA-256 来源事件键；历史重复仅保留最早一条规范键，不删除任何历史审计记录。
-- 旧钱包和监控物品合同扫描已接入 `insertOrIgnore()` 幂等写入；临时回扫、任务重试和并发重复事件由唯一键拦截。
-- 审计类型集中定义为 `wallet_transactions`、`contracts`、`isk_donations`、`member_contracts`，后续 Command、UI、CSV 和名称解析共用同一注册表。
+- **ISK 捐赠**：读取 `character_wallet_journals.ref_type=player_donation`。同一 donation 的正负镜像共享 journal `id`，规范化后只写一条；donor/recipient 始终是 `first_party_id → second_party_id`，不根据金额正负交换方向。
+- **成员低价合同**：只审 `finished` 的 `item_exchange` / `auction`，且 `price < 5,000,000.00`；`reward` 不参与阈值，命中记录的金额固定为 `price`，每份合同最多写一条，并保存完整 `contract_items` 快照。合同业务字段来自 `contract_details`，物品来自 `contract_items`。
+- **成员与白名单规则**：以当前 `corporation_members(corporation_id=98588384)` 做成员 XOR；成员→外部为 `outbound`、外部→成员为 `inbound`，内部或外部双方交易跳过。新规则只对**外部方**应用角色/军团白名单，Unknown 外部实体不会被自动豁免。
+- **启用前提**：migration 的初始配置默认停用。部署前须人工把 `seat_audit_corporations` 中 `corporation_id=98588384` 的 `enabled` 设为真，并设置实际业务生效时间 `audit_from`；所有事件仍须晚于或等于该时间。
+- **独立进度与幂等**：旧钱包/监控物品合同继续使用 `seat_audit_status`；新 donation/member-contract 使用 `seat_audit_scan_cursors`。成员合同以 `MAX(character_contracts.updated_at)` 聚合为 `discovered_at`，仅用于发现来源与 cursor；`date_completed` 仍是业务时间和 `audit_from` 判断依据。每批将写入和 cursor 推进置于同一事务，`source_event_key` 唯一索引防止镜像、重试和 overlap 重复写入。
+- **独立只读入口**：侧边栏「军团审计」仅显示两类 2.0 记录；旧「违规记录」与 CSV 仍只显示 1.0 的钱包/监控物品合同，避免混用两套白名单语义。
 
-完整开发拆分和完成进度见 [`todo.md`](todo.md)。在 donation / member-contract scanner、独立 UI 和测试完成前，不应把本分支视为可直接启用新军团审查业务的稳定版本。
+已在测试服务器只读确认 `contract_details` 不含 `updated_at`，而 `character_contracts` 具有映射时间字段；聚合查询、同一发现时间的合同 ID 分页边界和执行计划已完成只读核验。PHP 语法、migration 与真实数据扫描仍未验收；部署前应按 [`todo.md`](todo.md) 中的最小验证步骤执行。
 
 ## 环境要求
 
@@ -299,11 +299,16 @@ sudo -u www-data php artisan seat:audit:scan
 # 仅审钱包交易
 sudo -u www-data php artisan seat:audit:scan --type=wallet
 
-# 仅审合同
+# 仅审旧监控物品合同；--since 仅对此类型生效，且本次不推进旧水位线
 sudo -u www-data php artisan seat:audit:scan --type=contracts
+sudo -u www-data php artisan seat:audit:scan --type=contracts --since="2026-07-01"
+
+# 仅审固定军团 98588384 的 ISK 捐赠或成员低价合同
+sudo -u www-data php artisan seat:audit:scan --type=donations
+sudo -u www-data php artisan seat:audit:scan --type=member-contracts
 ```
 
-扫描基于水位线增量执行，重复运行不会产生重复记录。
+旧钱包/监控物品合同基于 `seat_audit_status` 增量执行；两类军团审计使用独立 cursor，并要求配置已启用且已人工设置 `audit_from`。所有类型都依赖来源键唯一索引防止重复记录。
 
 ### 5.5 解析外部角色名（Unknown ID）
 

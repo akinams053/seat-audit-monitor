@@ -8,6 +8,9 @@ namespace Seat\SeatAuditMonitor;
 use Seat\Services\AbstractSeatPlugin;
 use Seat\SeatAuditMonitor\Console\Commands\AuditScanCommand;
 use Seat\SeatAuditMonitor\Console\Commands\ResolveUnknownNamesCommand;
+use Seat\SeatAuditMonitor\Services\Audit\DonationEventNormalizer;
+use Seat\SeatAuditMonitor\Services\Audit\DonationJournalScanner;
+use Seat\SeatAuditMonitor\Services\Audit\EntitySnapshotResolver;
 
 class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
 {
@@ -50,11 +53,17 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
     }
 
     /**
-     * 服务绑定（当前无需额外绑定，使用 DB::table() 直接查询）
+     * 服务绑定。
+     *
+     * 当前军团审查固定只处理 corporation_id=98588384；成员名册直接由各扫描 Job 读取，
+     * 不注册多军团运行上下文或历史成员资格接口。下列服务均为无跨请求可变状态的解析器，
+     * 使用 singleton 复用服务定义即可。
      */
     public function register()
     {
-        //
+        $this->app->singleton(DonationEventNormalizer::class);
+        $this->app->singleton(EntitySnapshotResolver::class);
+        $this->app->singleton(DonationJournalScanner::class);
     }
 
     /**
