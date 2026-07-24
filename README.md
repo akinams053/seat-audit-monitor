@@ -150,9 +150,9 @@ sudo -u www-data php artisan route:clear && \
 sudo -u www-data php artisan view:clear
 ```
 
-### 军团审查 2.0 开发分支升级
+### 军团审查 2.0 / 令牌审查 2.1 开发分支升级
 
-当前阶段只升级数据库基础、统一审计类型和旧扫描幂等写入，不会启用 ISK 捐赠或成员低价合同扫描。建议先预览插件 migration，再执行实际迁移：
+`feature/corporation-audit-2.0` 分支同时包含军团审查 2.0 与令牌审查 2.1。首次从旧版本升级到 2.0 时，建议先预览插件 migration，再执行实际迁移；已经完成 2.0 migration、仅更新 2.1 页面或 CSV 导出时，只需 Composer 更新并清理缓存，**不需要再次执行 migration**：
 
 ```bash
 cd /var/www/seat
@@ -176,7 +176,7 @@ sudo -u www-data php artisan route:clear
 sudo -u www-data php artisan view:clear
 ```
 
-本阶段新增 6 个 migration：受审军团配置、初始军团配置、复合扫描游标、违规表扩展、历史来源事件键回填、来源事件键唯一索引。回填 migration 不删除历史重复行；只有每组最早记录获得规范键，其余历史行保留 `source_event_key=NULL`。迁移日志会输出 scanned / backfilled / duplicates / unresolved 统计。
+2.0 基础设施新增 6 个 migration：受审军团配置、初始军团配置、复合扫描游标、违规表扩展、历史来源事件键回填、来源事件键唯一索引。回填 migration 不删除历史重复行；只有每组最早记录获得规范键，其余历史行保留 `source_event_key=NULL`。迁移日志会输出 scanned / backfilled / duplicates / unresolved 统计。令牌审查 2.1（含 CSV 导出）不新增 migration。
 
 ### 升级验证
 

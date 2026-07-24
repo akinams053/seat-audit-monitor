@@ -2,7 +2,7 @@
 
 > 当前范围：在保持 1.0 市场交易/监控物品合同审计，以及 2.0 Donation/成员低价合同审计语义不变的前提下，为固定 EVE corporation `98588384` 增加 SeAT 令牌状态审查。
 >
-> 2.1 明确不做：令牌刷新或有效性探测、ESI scope 检查、ESI/SSO 调用、技能数据、最后地点、CSV/详情 modal、多军团支持、历史成员资格推断。
+> 2.1 明确不做：令牌刷新或有效性探测、ESI scope 检查、ESI/SSO 调用、技能数据、最后地点、详情 modal、多军团支持、历史成员资格推断。
 
 ## 已完成：军团审查 2.0
 
@@ -14,7 +14,7 @@
 - [x] 测试服务器真实合同 `#234305678` 已成功写入 `member_contracts` violation；Horizon 已重启加载修复。
 - [x] 2.0 代码与文档已提交并推送；用户已决定不将 Donation 真实对账、旧 1.0 回归、历史漏报统计/补扫作为本阶段阻塞项。
 
-## 进行中：令牌审查 2.1
+## 已完成：令牌审查 2.1
 
 ### 已确定的业务口径
 
@@ -34,7 +34,7 @@
 - [x] 已通过 `refresh_tokens.user_id → users.id → users.main_character_id` 确认「成员角色 → SeAT 用户 → 主角色」的数据关系；当前 token 关联成员未发现缺失用户或主角色。
 - [x] 已从 `/characters/{id}/sheet` 的 Controller、概览 View 与 `CharacterInfo` Model 源码确认：概览「头衔」为 `$character->title`，对应 `character_infos.title`；`$character->titles` 才是权限头衔列表，不能用于本列。
 - [x] 已确认 `character_onlines.character_id` 为主键，测试角色 `2118151113` 的 `last_login` 为当日上线时间；旧 `corporation_member_trackings.logoff_date` 只是追踪登出时间，不能作为页面最后上线来源。
-- [ ] 待最终修订版部署前，仅针对含 `character_onlines` JOIN 的固定查询在测试服务器执行一次受控 `EXPLAIN`，确认所有连接继续使用既有索引。
+- [ ] 非阻塞后续项：仅针对含 `character_onlines` JOIN 的固定查询在测试服务器执行一次受控 `EXPLAIN`，确认所有连接继续使用既有索引。
 
 ### 阶段 2：只读查询、分组与页面
 
@@ -44,15 +44,20 @@
 - [x] 已将最后上线投影由错误的 `corporation_member_trackings.logoff_date` 更正为 `character_onlines.last_login`；不读取或展示 `online` / `logins`。
 - [x] 已实现紧凑独立表格：四个状态标签、搜索、最后上线/入团时间筛选、每页组数、分页、低高度主角色分组、28 px 头像、纯图标状态、角色概览头衔、技能占位、入团/最后上线时间。
 
-### 阶段 3：验证与文档
+### 已完成：部署与文档
 
-- [ ] 覆盖三态、主/子角色分组、主角色不在当前军团、未绑定独立组、30/60 天临界、空/无效/未来时间、筛选与组分页。
-- [ ] 验证页面不产生数据库写入、不派发 Job、不调用 ESI/SSO，且不会在 HTML、日志或异常中泄露 token/scope。
-- [x] 已在 README 固化 schema contract、三态规则、只读边界、UTC 规则、入团/最后上线来源、技能占位、实时查询性能决策和 SeAT 升级后的 preflight 要求。
+- [x] 已在 README 固化 schema contract、三态规则、只读边界、UTC 规则、入团/最后上线来源、CSV 导出安全边界、技能占位、实时查询性能决策和 SeAT 升级后的 preflight 要求。
+- [x] 已在测试服务器以 PHP 8.4 对 2.1 的 Controller、路由及 CSV 导出改动执行临时 `php -l`，临时文件均已删除。
+- [x] 已通过 Composer 将测试服务器从 `7b1c628` 更新至包含 CSV 导出的分支版本，并执行 `config:clear`、`route:clear`、`view:clear`；2.1 不执行 migration。
+
+### 非阻塞后续验证
+
+- [ ] 如需自动化回归，覆盖三态、主/子角色分组、主角色不在当前军团、未绑定独立组、30/60 天临界、空/无效/未来时间、筛选、组分页与 CSV 公式注入。
+- [ ] 如需请求级证据，验证页面/导出不产生数据库写入、不派发 Job、不调用 ESI/SSO，且不会在 HTML、日志或异常中泄露 token/scope。
 
 ## 后续阶段（不属于 2.1）
 
 - [ ] 技能列表数据与展示。
 - [ ] 令牌 scope 检查、手动/定时令牌有效性验证。
-- [ ] 最后地点、CSV 导出、详情 modal。
+- [ ] 最后地点、详情 modal。
 - [ ] 多军团配置与历史成员资格。
