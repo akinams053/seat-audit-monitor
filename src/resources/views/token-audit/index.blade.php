@@ -14,11 +14,12 @@
                 <ul class="nav nav-pills ml-auto p-1">
                     @foreach($statusLabels as $statusKey => $statusLabel)
                         @php
-                            // 状态标签只改变令牌状态过滤；保留两个时间范围、搜索和账号组分页数量。
+                            // 状态标签只改变令牌状态过滤；保留三种时间范围、搜索和账号组分页数量。
                             // 刻意不保留 page，切换状态必须回到筛选结果的第一页。
                             $tabParameters = [
                                 'status'        => $statusKey,
                                 'last_seen'     => $lastSeen,
+                                'last_logoff'   => $lastLogoff,
                                 'joined_within' => $joinedWithin,
                                 'q'             => $search,
                                 'per_page'      => $perPage,
@@ -55,6 +56,14 @@
                         </select>
                     </div>
                     <div class="col-sm-3 col-md-2 mb-1">
+                        <label class="small mb-1" for="token_audit_last_logoff">最后离线</label>
+                        <select id="token_audit_last_logoff" name="last_logoff" class="form-control form-control-sm">
+                            @foreach($lastLogoffLabels as $lastLogoffKey => $lastLogoffLabel)
+                                <option value="{{ $lastLogoffKey }}" @selected($lastLogoff === $lastLogoffKey)>{{ $lastLogoffLabel }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="col-sm-3 col-md-2 mb-1">
                         <label class="small mb-1" for="token_audit_joined_within">入团时间</label>
                         <select id="token_audit_joined_within" name="joined_within" class="form-control form-control-sm">
                             @foreach($joinedWithinLabels as $joinedWithinKey => $joinedWithinLabel)
@@ -78,6 +87,7 @@
                         <a href="{{ route('seat-audit.token-audit.export', [
                             'status' => $status,
                             'last_seen' => $lastSeen,
+                            'last_logoff' => $lastLogoff,
                             'joined_within' => $joinedWithin,
                             'q' => $search,
                         ]) }}" class="btn btn-sm btn-outline-success"><i class="fas fa-download"></i> 导出 CSV</a>
@@ -107,12 +117,13 @@
                                     <th>技能列表</th>
                                     <th class="text-nowrap">已加入</th>
                                     <th class="text-nowrap">最后上线</th>
+                                    <th class="text-nowrap">最后离线</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 @foreach($auditGroups as $group)
                                     <tr class="table-active small">
-                                        <td colspan="6" class="py-1">
+                                        <td colspan="7" class="py-1">
                                             @if($group->primaryCharacterId !== null)
                                                 <strong><i class="fas fa-user-friends"></i> 主要角色：{{ $group->primaryCharacterName }}</strong>
                                                 @if(! $group->primaryCharacterInScope)
@@ -125,8 +136,15 @@
                                     </tr>
                                     @foreach($group->characters as $character)
                                         @php
-                                            // 颜色只表示 last_login 距当前 UTC 基准的时间段，不表示 token 有效性或当前在线状态。
+                                            // 两种时间 badge 都只表示相对 UTC 时间段：上线来自 last_login，离线来自成员追踪 logoff_date。
+                                            // 它们均不表示 token 有效性、实时在线状态或任何 ESI/SSO 校验结论。
                                             $lastLoginBadge = match ($character->lastLoginAt->band) {
+                                                'within_30' => 'badge-success',
+                                                'within_60' => 'badge-warning',
+                                                'over_60' => 'badge-danger',
+                                                default => 'badge-secondary',
+                                            };
+                                            $lastLogoffBadge = match ($character->lastLogoffAt->band) {
                                                 'within_30' => 'badge-success',
                                                 'within_60' => 'badge-warning',
                                                 'over_60' => 'badge-danger',
@@ -162,6 +180,9 @@
                                             </td>
                                             <td class="align-middle py-1 text-nowrap" @if($character->lastLoginAt->tooltip) title="{{ $character->lastLoginAt->tooltip }}" @endif>
                                                 <span class="badge {{ $lastLoginBadge }}">{{ $character->lastLoginAt->label }}</span>
+                                            </td>
+                                            <td class="align-middle py-1 text-nowrap" @if($character->lastLogoffAt->tooltip) title="{{ $character->lastLogoffAt->tooltip }}" @endif>
+                                                <span class="badge {{ $lastLogoffBadge }}">{{ $character->lastLogoffAt->label }}</span>
                                             </td>
                                         </tr>
                                     @endforeach

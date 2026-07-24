@@ -16,6 +16,7 @@ final class SeatTokenAuditController extends Controller
 {
     private const ALLOWED_STATUSES = ['all', 'normal', 'expired', 'unbound'];
     private const ALLOWED_LAST_SEEN_FILTERS = ['all', 'within_30', 'within_60'];
+    private const ALLOWED_LAST_LOGOFF_FILTERS = ['all', 'within_30', 'within_60'];
     private const ALLOWED_JOINED_WITHIN_FILTERS = ['all', 'within_30', 'within_60'];
     private const ALLOWED_PER_PAGE = [10, 25, 50, 100];
 
@@ -36,7 +37,9 @@ final class SeatTokenAuditController extends Controller
         $status = $this->allowedValue((string) request('status', 'all'), self::ALLOWED_STATUSES, 'all');
         // last_seen 沿用既有 URL 参数，筛选数据源在读取服务中改为 character_onlines.last_login。
         $lastSeen = $this->allowedValue((string) request('last_seen', 'all'), self::ALLOWED_LAST_SEEN_FILTERS, 'all');
-        // 入团范围与最后上线独立组合，非法参数必须回退为全部，避免用户输入产生不可预测的筛选结果。
+        // 最后离线来自军团成员追踪的 logoff_date；和最后上线独立组合，非法参数必须回退为全部。
+        $lastLogoff = $this->allowedValue((string) request('last_logoff', 'all'), self::ALLOWED_LAST_LOGOFF_FILTERS, 'all');
+        // 入团时间同样来自军团成员追踪的 start_date，并与两种离线/上线时间独立组合。
         $joinedWithin = $this->allowedValue((string) request('joined_within', 'all'), self::ALLOWED_JOINED_WITHIN_FILTERS, 'all');
         $perPage = $this->allowedPerPage(request('per_page'));
         $page = max(1, (int) request('page', 1));
@@ -45,7 +48,14 @@ final class SeatTokenAuditController extends Controller
         // 审查基准固定为本次 HTTP 请求开始时的 UTC；同一页所有角色使用同一个基准，避免跨午夜边界不一致。
         $characters = $readService->readCurrentMembers(CarbonImmutable::now('UTC'));
         $statusCounts = $groupingService->statusCounts($characters);
-        $groups = $groupingService->filterAndGroup($characters, $status, $lastSeen, $joinedWithin, $search);
+        $groups = $groupingService->filterAndGroup(
+            $characters,
+            $status,
+            $lastSeen,
+            $lastLogoff,
+            $joinedWithin,
+            $search,
+        );
 
         // 以账号组分页而非按角色分页，保证主/子角色列表不会在相邻页面失去其分组标题。
         $totalGroups = count($groups);
@@ -53,6 +63,7 @@ final class SeatTokenAuditController extends Controller
         $paginationParameters = [
             'status'        => $status,
             'last_seen'     => $lastSeen,
+            'last_logoff'   => $lastLogoff,
             'joined_within' => $joinedWithin,
             'q'             => $search,
             'per_page'      => $perPage,
@@ -79,6 +90,11 @@ final class SeatTokenAuditController extends Controller
             'within_30' => '30 天内上线',
             'within_60' => '60 天内上线',
         ];
+        $lastLogoffLabels = [
+            'all'       => '全部离线时间',
+            'within_30' => '30 天内离线',
+            'within_60' => '60 天内离线',
+        ];
         $joinedWithinLabels = [
             'all'       => '全部入团时间',
             'within_30' => '30 天内入团',
@@ -89,12 +105,14 @@ final class SeatTokenAuditController extends Controller
             'auditGroups',
             'status',
             'lastSeen',
+            'lastLogoff',
             'joinedWithin',
             'search',
             'perPage',
             'statusCounts',
             'statusLabels',
             'lastSeenLabels',
+            'lastLogoffLabels',
             'joinedWithinLabels',
         ));
     }
@@ -117,13 +135,21 @@ final class SeatTokenAuditController extends Controller
         // 与 index() 完全使用同一组业务筛选；刻意忽略 page/per_page，避免导出被当前浏览页截断。
         $status = $this->allowedValue((string) request('status', 'all'), self::ALLOWED_STATUSES, 'all');
         $lastSeen = $this->allowedValue((string) request('last_seen', 'all'), self::ALLOWED_LAST_SEEN_FILTERS, 'all');
+        $lastLogoff = $this->allowedValue((string) request('last_logoff', 'all'), self::ALLOWED_LAST_LOGOFF_FILTERS, 'all');
         $joinedWithin = $this->allowedValue((string) request('joined_within', 'all'), self::ALLOWED_JOINED_WITHIN_FILTERS, 'all');
         $search = $this->limitSearch((string) request('q', ''));
 
         // 同一份 UTC 审查基准同时驱动读取、时间分段和 CSV 精确时间，避免导出过程跨午夜改变筛选边界。
         $asOf = CarbonImmutable::now('UTC');
         $characters = $readService->readCurrentMembers($asOf);
-        $groups = $groupingService->filterAndGroup($characters, $status, $lastSeen, $joinedWithin, $search);
+        $groups = $groupingService->filterAndGroup(
+            $characters,
+            $status,
+            $lastSeen,
+            $lastLogoff,
+            $joinedWithin,
+            $search,
+        );
         $filename = 'seat-token-audit-' . $asOf->format('Ymd_His') . '-UTC.csv';
 
         $headers = [
@@ -150,6 +176,7 @@ final class SeatTokenAuditController extends Controller
                 '角色头衔',
                 '入团时间（UTC）',
                 '最后上线（UTC）',
+                '最后离线（UTC）',
             ]);
 
             foreach ($groups as $group) {
@@ -165,6 +192,7 @@ final class SeatTokenAuditController extends Controller
                     // tooltip 已是稳定的精确 UTC 时间；缺失或无效值没有可审计时间时保留页面的明确状态标签。
                     $joinedAt = $character->joinedAt->tooltip ?? $character->joinedAt->label;
                     $lastLoginAt = $character->lastLoginAt->tooltip ?? $character->lastLoginAt->label;
+                    $lastLogoffAt = $character->lastLogoffAt->tooltip ?? $character->lastLogoffAt->label;
 
                     fputcsv($handle, array_map($this->csvCell(...), [
                         $this->tokenStatusLabel($character->tokenStatus),
@@ -177,6 +205,7 @@ final class SeatTokenAuditController extends Controller
                         $character->displayTitle(),
                         $joinedAt,
                         $lastLoginAt,
+                        $lastLogoffAt,
                     ]));
                 }
             }

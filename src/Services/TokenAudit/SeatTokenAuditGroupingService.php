@@ -38,10 +38,18 @@ final class SeatTokenAuditGroupingService
      * @param array<int, TokenAuditCharacter> $characters
      * @param 'all'|'normal'|'expired'|'unbound' $status
      * @param 'all'|'within_30'|'within_60' $lastSeen
+     * @param 'all'|'within_30'|'within_60' $lastLogoff
      * @param 'all'|'within_30'|'within_60' $joinedWithin
      * @return array<int, TokenAuditGroup>
      */
-    public function filterAndGroup(array $characters, string $status, string $lastSeen, string $joinedWithin, string $search): array
+    public function filterAndGroup(
+        array $characters,
+        string $status,
+        string $lastSeen,
+        string $lastLogoff,
+        string $joinedWithin,
+        string $search,
+    ): array
     {
         // $characters 是查询层读取的完整当前军团成员名册；先固化 ID 集合，避免后续页面筛选
         // （例如只看「账号过期」）把状态正常的主角色排除后，错误显示为「主角色不在当前军团成员范围」。
@@ -56,6 +64,7 @@ final class SeatTokenAuditGroupingService
         foreach ($characters as $character) {
             if (! $this->matchesStatus($character, $status)
                 || ! $this->matchesLastSeen($character, $lastSeen)
+                || ! $this->matchesLastLogoff($character, $lastLogoff)
                 || ! $this->matchesJoinedWithin($character, $joinedWithin)
                 || ! $this->matchesSearch($character, $search)) {
                 continue;
@@ -141,6 +150,13 @@ final class SeatTokenAuditGroupingService
     {
         // 最后上线唯一使用 character_onlines.last_login；不能回退到成员追踪表的 logoff_date。
         return $this->matchesTimeBand($character->lastLoginAt->band, $lastSeen);
+    }
+
+    /** @param 'all'|'within_30'|'within_60' $lastLogoff */
+    private function matchesLastLogoff(TokenAuditCharacter $character, string $lastLogoff): bool
+    {
+        // 最后离线仅使用军团成员追踪的 logoff_date，和 character_onlines 的最后上线语义独立。
+        return $this->matchesTimeBand($character->lastLogoffAt->band, $lastLogoff);
     }
 
     /** @param 'all'|'within_30'|'within_60' $joinedWithin */

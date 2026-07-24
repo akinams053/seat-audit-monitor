@@ -47,9 +47,9 @@ Eve SeAT 5.x 角色交易审计监控插件（市场交易 + 合同）
 - **成员范围**：仅从 `corporation_members(corporation_id=98588384)` 读取当前 SeAT 已同步的成员；没有绑定 SeAT 的成员仍会显示为「无 SeAT 用户」。
 - **令牌三态**：只使用 `refresh_tokens.character_id`、`user_id` 与 `deleted_at`；存在未软删除记录为「状态正常」、仅有已删除记录为「账号过期」、没有记录为「无 SeAT 用户」。这只是 SeAT 本地记录状态，不做实时 token/SSO 有效性探测。
 - **主/子角色**：按 `refresh_tokens.user_id → users.main_character_id` 分组。状态与时间范围先在角色级别筛选，再按账号组分页，因此同账号只显示命中条件的角色行。
-- **头衔与时间**：角色头衔来自 `character_infos.title`；入团时间来自 `corporation_member_trackings.start_date`；最后上线来自 `character_onlines.last_login`。最后上线不是当前在线状态；无 `last_login` 记录会明确显示「无记录」。
-- **筛选与时区**：支持令牌状态、关键词、最后上线、入团时间以及每页账号组数。30/60 天边界按 UTC 自然日计算，60 天内包含 30 天内；悬停时间单元格可查看精确 UTC 时间。
-- **CSV 导出**：具有 `seat-audit-monitor.view` 权限的用户可导出当前角色级筛选命中的全部成员，不受账号组分页影响。每行保留主角色归属、角色、头衔、令牌状态与精确 UTC 时间；不导出 SeAT 内部 user ID、group key 或任何 token/refresh token/scope/JWT/`expires_on` 数据。所有单元格均实施 Excel/WPS 公式注入防护。
+- **头衔与时间**：角色头衔来自 `character_infos.title`；入团时间来自 `corporation_member_trackings.start_date`；最后上线来自 `character_onlines.last_login`；最后离线来自 `corporation_member_trackings.logoff_date`。最后上线与最后离线分别表示最后登录与军团追踪到的最后登出，均不是当前在线状态，不能互相替代；无记录会明确显示「无记录」。
+- **筛选与时区**：支持令牌状态、关键词、最后上线、最后离线、入团时间以及每页账号组数。三种时间筛选均按角色级 AND 组合；30/60 天边界按 UTC 自然日计算，60 天内包含 30 天内；悬停时间单元格可查看精确 UTC 时间。
+- **CSV 导出**：具有 `seat-audit-monitor.view` 权限的用户可导出当前角色级筛选命中的全部成员，不受账号组分页影响。每行保留主角色归属、角色、头衔、令牌状态、入团/最后上线/最后离线的精确 UTC 时间；不导出 SeAT 内部 user ID、group key 或任何 token/refresh token/scope/JWT/`expires_on` 数据。所有单元格均实施 Excel/WPS 公式注入防护。
 - **性能决策**：测试服务器实测目标军团 2,171 名成员时，成员范围、token、用户、角色、名称、tracking 的最终 JOIN 均由索引/主键驱动，无重复关联或全表扫描。页面保持实时单次查询，不预先增加缓存或快照表；仅在未来出现慢查询、高并发或计划退化的证据时，再评审短 TTL 脱敏缓存。
 
 > SeAT 升级后，应在测试环境重新核验 `corporation_members`、`refresh_tokens`、`character_onlines`、`corporation_member_trackings` 的字段、唯一键与最终查询 `EXPLAIN`，再部署令牌审查变更。
