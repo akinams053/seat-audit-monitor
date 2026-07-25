@@ -6,6 +6,12 @@
 
 暂无未发布变更。
 
+## [2.2.1] - 2026-07-25
+
+### Fixed
+
+- 修正 SeAT 插件元数据中的仓库 URL 为空的问题，使模块版本页可显示项目 GitHub 链接。
+
 ## [2.2.0] - 2026-07-25
 
 ### Added
@@ -39,7 +45,8 @@
 - 扩展审计权限，使查看和管理职责分离；
 - 为军团审计引入独立 cursor、幂等来源事件键与受审军团配置。
 
-[Unreleased]: https://github.com/akinams053/seat-audit-monitor/compare/2.2.0...HEAD
+[Unreleased]: https://github.com/akinams053/seat-audit-monitor/compare/2.2.1...HEAD
+[2.2.1]: https://github.com/akinams053/seat-audit-monitor/compare/2.2.0...2.2.1
 [2.2.0]: https://github.com/akinams053/seat-audit-monitor/compare/2.1.1...2.2.0
 [2.1.1]: https://github.com/akinams053/seat-audit-monitor/compare/2.1...2.1.1
 [2.1]: https://github.com/akinams053/seat-audit-monitor/releases/tag/2.1

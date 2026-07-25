@@ -4,7 +4,7 @@
 
 ## 升级前准备
 
-1. 确认目标版本。生产默认目标是 `2.2.0`；开发分支不是生产升级路径。
+1. 确认目标版本。生产默认目标是 `2.2.1`；开发分支不是生产升级路径。
 2. 备份 SeAT 数据库，并记录当前 `composer.lock`、已安装插件版本和 migration 状态。
 3. 确认 Web、queue worker/Horizon 和共享 Cache 的当前健康状态。
 4. 在授权测试环境先执行 Composer 解析、`migrate:status` 与 `migrate --pretend`；不要把预检结果直接假定为生产结果。
@@ -15,11 +15,11 @@ sudo -u <web-user> php artisan migrate:status --path=vendor/akinams053/seat-audi
 sudo -u <web-user> php artisan migrate --pretend --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 ```
 
-## 升级到 2.2.0
+## 升级到 2.2.1
 
 ```bash
 cd <seat-dir>
-sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.0 --update-with-dependencies
+sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.1 --update-with-dependencies
 sudo -u <web-user> php artisan migrate --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 sudo -u <web-user> php artisan config:clear
 sudo -u <web-user> php artisan route:clear

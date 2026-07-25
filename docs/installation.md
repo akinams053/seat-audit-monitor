@@ -1,6 +1,6 @@
 # 安装指南
 
-> **适用版本：2.2.0（生产推荐）**。开发分支的安装仅用于测试；版本边界见 [CHANGELOG](../CHANGELOG.md)。
+> **适用版本：2.2.1（生产推荐）**。开发分支的安装仅用于测试；版本边界见 [CHANGELOG](../CHANGELOG.md)。
 
 ## 1. 安装前检查
 
@@ -17,7 +17,7 @@
 
 ```bash
 cd <seat-dir>
-sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.0 --update-with-dependencies
+sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.1 --update-with-dependencies
 sudo -u <web-user> php artisan migrate:status --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 sudo -u <web-user> php artisan migrate --pretend --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 sudo -u <web-user> php artisan migrate --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
@@ -33,7 +33,7 @@ sudo -u <web-user> php artisan view:clear
 完成安装后：
 
 1. 登录 SeAT，确认侧边栏出现“审计监控”；
-2. 在 **Settings > SeAT Module Versions** 确认插件被识别为 `2.2.0`；
+2. 在 **Settings > SeAT Module Versions** 确认插件被识别为 `2.2.1`；
 3. 在 **Settings > Access Management** 确认可分配 `seat-audit-monitor.view` 和 `seat-audit-monitor.admin`；
 4. 确认 `php artisan seat:audit:scan --help` 可用；
 5. 确认 Web 和 queue worker 使用同一共享 Cache，再进行任何 Web 军团扫描。

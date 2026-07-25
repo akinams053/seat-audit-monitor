@@ -80,11 +80,11 @@ class SeatAuditMonitorServiceProvider extends AbstractSeatPlugin
     }
 
     /**
-     * 返回插件包所在 Git 仓库地址（可留空）
+     * 返回插件包所在 Git 仓库地址，供 SeAT 模块版本页生成项目链接
      */
     public function getPackageRepositoryUrl(): string
     {
-        return '';
+        return 'https://github.com/akinams053/seat-audit-monitor';
     }
 
     /**

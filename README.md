@@ -2,7 +2,7 @@
 
 Eve SeAT 5.x 的经济审计与只读令牌审查插件。它提供旧版市场/合同审计、固定军团审查，以及不接触授权秘密的令牌状态投影。
 
-> **当前正式版本：[`2.2.0`](CHANGELOG.md#220)**。它包含最后离线、军团审计九列交易视图与扩展 Unknown 实体解析等近期功能；完整变更见 [CHANGELOG](CHANGELOG.md)。
+> **当前正式版本：[`2.2.1`](CHANGELOG.md#221)**。它包含最后离线、军团审计九列交易视图与扩展 Unknown 实体解析等近期功能，并修正 SeAT 模块版本页的仓库链接；完整变更见 [CHANGELOG](CHANGELOG.md)。
 
 ## 支持范围
 
@@ -27,7 +27,7 @@ Eve SeAT 5.x 的经济审计与只读令牌审查插件。它提供旧版市场/
 
 ```bash
 cd <seat-dir>
-sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.0 --update-with-dependencies
+sudo -u <web-user> composer require akinams053/seat-audit-monitor:2.2.1 --update-with-dependencies
 sudo -u <web-user> php artisan migrate --path=vendor/akinams053/seat-audit-monitor/src/database/migrations
 sudo -u <web-user> php artisan config:clear
 sudo -u <web-user> php artisan route:clear

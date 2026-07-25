@@ -1,6 +1,6 @@
 # 审计架构与开发约束
 
-> 本文是实现与评审的技术参考。正式生产行为以 [`2.2.0`](../../CHANGELOG.md#220) 为基线；后续新增能力必须先在 [CHANGELOG](../../CHANGELOG.md) 的 Unreleased 区域声明。
+> 本文是实现与评审的技术参考。正式生产行为以 [`2.2.1`](../../CHANGELOG.md#221) 为基线；后续新增能力必须先在 [CHANGELOG](../../CHANGELOG.md) 的 Unreleased 区域声明。
 
 ## 架构原则
 
