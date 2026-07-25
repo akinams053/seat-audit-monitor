@@ -19,6 +19,15 @@
 - [x] 正式版 `2.1` 已发布；README 已记录从 2.0 或开发分支切换到该标签的 Composer 更新与缓存清理步骤。
 - [x] 用户已决定不将 Donation 真实对账、旧 1.0 回归、历史漏报统计/补扫作为本阶段阻塞项。
 
+## 进行中：军团审计交易视图与 Unknown 实体解析
+
+- [x] 军团审计查询与 CSV 改为九列交易视图：由 `direction` 显式映射发起方 / 接收方，双方军团按扫描快照 ID 优先以 `corporation_infos`、回退 `universe_names` 显示；未复用旧 1.0 的查询层白名单软过滤。
+- [x] 成员低价合同从 `details.items` 批量解析 SDE 物品名，列表显示包含 / 需求语义摘要，详情 modal 显示完整物品快照；Donation 明确标为无物品、无合同详情。
+- [x] 军团审计支持角色 / 军团 / ticker 关键词，页面分页、tab、导出一致保留筛选；CSV 保持 cursor 流式、UTF-8 BOM、decimal 字符串金额和公式注入防护。
+- [x] 军团页新增 admin + CSRF 保护的「解析未知来源」异步入口；Job 按 ESI category 区分角色、军团和联盟，只将已确认角色提交 affiliation 接口，并补全快照相关军团/联盟名称缓存而不改写历史 ID。
+- [x] 在测试服务器 PHP 8.4 以临时目录对 Controller、Unknown 解析 Job、命令和路由执行 `php -l`，检查后已删除临时文件。
+- [ ] 待执行页面级验收：分别核对 inbound / outbound Donation 与成员低价合同、关键词、九列 CSV、合同 modal 和 Unknown 解析后的缓存显示；不得未经单独授权连接服务器执行扫描或写库验证。
+
 ## 已完成：令牌审查 2.1
 
 ### 已确定的业务口径

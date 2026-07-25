@@ -29,6 +29,9 @@ Route::group([
         ->name('seat-audit.corporation-audit.scan-status');
     Route::post('/corporation-audit/scan', 'CorporationAuditController@scan')
         ->name('seat-audit.corporation-audit.scan');
+    // 仅管理员可异步提交 Unknown 实体/军团名称解析；Controller 内继续校验 admin 权限。
+    Route::post('/corporation-audit/resolve-unknown', 'CorporationAuditController@resolveUnknown')
+        ->name('seat-audit.corporation-audit.resolve-unknown');
 
     // 固定军团令牌状态审查：纯 GET 只读页面，没有扫描、刷新 token 或 ESI 调用入口。
     Route::get('/token-audit', 'SeatTokenAuditController@index')

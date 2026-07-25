@@ -18,12 +18,12 @@ Eve SeAT 5.x 经济合规审计与令牌审查插件
     - **军团白名单**（内部互转豁免，AND 语义）：仅合同审计生效；发起方军团 AND 接收方军团 都在军团白名单 → 跳过（典型用例：内部主公司加进军团白名单 → 内部成员之间合同豁免，与外部之间的合同仍审计）
     - **白名单事后变更对历史违规列表实时生效**（UI 查询层软过滤）
 - **违规记录** — 自动记录发起方/接收方角色与军团、物品名、金额、来源类型、合同 ID 等快照信息
-- **类型筛选** — 旧违规记录按钱包/合同、时间区间与通用关键词组合筛选；军团审计按 Donation/成员低价合同标签与日期范围独立筛选；零金额合同 UI 灰底标识
+- **类型筛选** — 旧违规记录按钱包/合同、时间区间与通用关键词组合筛选；军团审计按 Donation/成员低价合同标签、日期与角色/军团/ticker 关键词独立筛选；零金额合同 UI 灰底标识
 - **来源细分** — 合同行 badge 按 availability 进一步分公开 / 私人 / 军团 / 联盟（颜色区分）
 - **合同详情 modal** — 点击 Contract ID 弹出快照详情（合同 / 命中物品 / 三方角色）
 - **CSV 导出** — 违规记录与军团审计均支持按当前筛选流式导出 CSV，Excel/WPS 可直接打开；外部文本均防护公式注入
 - **手动扫描** — 旧钱包/监控物品合同保留原 Web 扫描入口；军团审计页可按当前标签异步提交 ISK 捐赠或成员低价合同扫描，浏览器在任务结束后自动刷新并提示结果；Artisan 仍可按 `wallet`、`contracts`、`donations`、`member-contracts` 或 `all` 执行四类审计
-- **外部角色名 ESI 批量解析** — 对未在 SeAT 注册的外部玩家（违规记录显示 "Unknown (ID: X)"），Web UI 一键调 ESI 公开接口同时解析**角色名 + 当前所属军团 + 军团名字**并回写本地缓存（`universe_names` + `character_affiliations`），或 Artisan `seat:audit:resolve-unknown-names`
+- **未知实体 ESI 批量解析** — 对旧违规或军团审计中显示 `Unknown (ID: X)` 的角色、军团或联盟，Web UI 一键异步调用 ESI 公开接口补全名称；已确认角色再补全当前 affiliation 与相关军团/联盟名称并回写本地缓存（`universe_names` + `character_affiliations`）。不解析星系、空间站、建筑或合同物理位置；也不改写审计记录的历史军团快照 ID。
 - **白名单加入外部角色** — 角色白名单支持加入非 SeAT 内的外部角色（本地搜不到时通过 ESI `/universe/ids/` 精确名字查找）
 - **权限隔离** — 查看权限 (view) 与管理权限 (admin) 分离
 
@@ -39,6 +39,16 @@ Eve SeAT 5.x 经济合规审计与令牌审查插件
 - **独立审计入口与导出**：侧边栏「军团审计」以「ISK 捐赠」和「成员低价合同」标签分别显示两类 2.0 记录；具有 admin 权限的用户可从当前标签异步提交扫描。提交后页面以 30 分钟短 TTL 的共享 Cache 轮询本次任务状态，显示排队/批次/新增数，并在成功、跳过或最终失败后自动刷新一次并提示结果；它不提供跨页面或跨管理员的 Job 去重，使用者仍应等待本次结果而不要重复点击。Cache 被清理或过期时只会失去页面跟踪，不影响 Job、cursor 或已入库数据。具有 view 权限的用户可导出当前标签和日期范围内的全部 2.0 记录；导出不分页、不混入旧 1.0 数据、不输出 `details` JSON，并以流式 CSV、UTF-8 BOM 和 Excel/WPS 公式注入防护输出。页面日期只过滤已入库结果，不改变 `audit_from` 或 cursor 的实际扫描范围；运行 Web 扫描前必须确保 SeAT 的 queue worker / Horizon 与共享 Cache 正常运行。
 
 测试服务器已完成 2.0 migration、PHP 语法、队列/Horizon 与真实成员低价合同扫描验证：合同 `#234305678` 已写入一条 `member_contracts` 违规，金额为 `0.00`，并确认内部 `price_decimal` 投影不会混入 `details.contract` 快照。当前已知待处理事项是：如需补录修复前被 cursor 越过的历史合同，须先统计范围并执行受控补扫；ISK 捐赠完整落库验证与旧 1.0 审计回归仍应按 [`todo.md`](todo.md) 继续执行。
+
+### 军团审计结果展示与未知来源解析
+
+军团审计页面以旧「违规记录」相同的九列交易视图显示：**发起方 / 发起方军团 / 接收方 / 接收方军团 / 物品名称 / 交易金额 (ISK) / 来源 / 合同详情 / 发生时间**。
+
+- 2.0 顶层 `character_*` 固定是本军团成员、`counterparty_*` 固定是外部方；页面只根据 `direction` 显式映射业务方向：`outbound` 为成员发起，`inbound` 为外部方发起。历史异常 direction 会标记为未知，绝不默认猜测方向。
+- 双方军团名称按记录内的 `character_corporation_id` / `counterparty_corporation_id` **扫描时快照**显示，优先 `corporation_infos`、再回退 `universe_names`；不以 `character_affiliations` 的当前归属覆盖历史事实。
+- ISK Donation 固定显示「无物品（ISK 捐赠）」和无合同详情。成员低价合同从 `details.items` 汇总物品名、数量与「包含 / 需求」语义；Contract ID 弹窗显示合同、完整物品和三方快照，未同步 items 会明确提示。
+- CSV 与页面使用同一方向、快照军团、关键词及物品摘要口径，仍以 cursor 流式输出、UTF-8 BOM 和公式注入防护处理；不导出 `details` JSON。
+- admin 可在军团审计页提交「解析未知来源」。该任务只异步补全 Unknown 角色、外部实体、军团/联盟的本地显示缓存；不在 HTTP 请求中调用 ESI，不修改历史军团 ID，也不涉及物理位置字段。
 
 ## 令牌审查 2.1 与开发分支最后离线功能
 
@@ -327,9 +337,9 @@ sudo -u www-data php artisan config:clear
 
 **旧 1.0 Web 界面**：违规记录页右上角下拉选择审计类型（全部 / 仅钱包 / 仅合同），点击 **立即审查**（需 admin 权限）。
 
-**军团审计 Web 界面**：在「军团审计」页顶部切换 **ISK 捐赠** / **成员低价合同** 标签；admin 点击当前标签旁的扫描按钮后，任务会异步加入队列。页面会立即提示“已提交，请勿重复点击”，并通过共享 Cache 每 3 秒轮询排队/处理进度；任务成功、跳过或最终失败后会自动刷新一次并显示提示。浏览器页面关闭、Cache 过期或 Cache 被清理时不影响后台 Job，只是页面无法继续跟踪该次任务，届时应手动刷新查看记录。该体验层不阻止多个页面或管理员重复投递扫描。页面日期筛选仅影响显示结果，不会改变 `audit_from` 或 cursor 的实际扫描范围。
+**军团审计 Web 界面**：在「军团审计」页顶部切换 **ISK 捐赠** / **成员低价合同** 标签，并用日期、角色/军团/ticker 关键词筛选已入库记录。表格按发起方和接收方的实际方向展示：成员→外部为 `outbound`，外部→成员为 `inbound`；双方军团取扫描快照而不是当前 affiliation。Donation 明确没有物品/合同，成员低价合同展示物品摘要并可打开 Contract ID 快照弹窗。admin 点击当前标签旁的扫描按钮后，任务会异步加入队列；「解析未知来源」会异步补全 Unknown 角色/实体和军团/联盟本地名称缓存。页面会立即提示“已提交，请勿重复点击”，并通过共享 Cache 每 3 秒轮询排队/处理进度；任务成功、跳过或最终失败后会自动刷新一次并显示提示。浏览器页面关闭、Cache 过期或 Cache 被清理时不影响后台 Job，只是页面无法继续跟踪该次任务，届时应手动刷新查看记录。该体验层不阻止多个页面或管理员重复投递扫描。页面日期和关键词筛选只影响显示结果，不会改变 `audit_from` 或 cursor 的实际扫描范围。
 
-**军团审计 CSV**：具有 view 权限的用户可在当前标签旁点击 **导出 CSV**，下载该审计类型和当前日期范围内的全部结果，不受页面 50 条分页限制。导出包含成员/外部方、方向、金额、来源引用或 Contract ID、军团 ID 快照与发生时间；不包含 `details` JSON，且所有单元格均防护 Excel/WPS 公式注入。
+**军团审计 CSV**：具有 view 权限的用户可在当前标签旁点击 **导出 CSV**，下载该审计类型、日期和关键词范围内的全部结果，不受页面 50 条分页限制。列与页面一致：发起方、发起方军团、接收方、接收方军团、物品名称、交易金额、来源、合同详情、发生时间；不包含 `details` JSON，且所有单元格均防护 Excel/WPS 公式注入。
 
 **命令行**：
 ```bash
@@ -350,25 +360,25 @@ sudo -u www-data php artisan seat:audit:scan --type=member-contracts
 
 旧钱包/监控物品合同基于 `seat_audit_status` 增量执行；两类军团审计使用独立 cursor，并要求配置已启用且已人工设置 `audit_from`。`audit_from` 仅决定首次扫描允许读取的最早业务时间，后续正常扫描只处理 cursor 之后的新来源和十分钟 overlap；所有类型都依赖来源键唯一索引防止重复记录。
 
-### 5.5 解析外部角色名（Unknown ID）
+### 5.5 解析未知实体（Unknown ID）
 
-违规记录里会出现 `Unknown (ID: 2120882761)` 这类条目——这是未在你 SeAT 实例授权过 ESI 的外部玩家，SeAT 本地没有他们的名字。
+旧违规或军团审计里可能出现 `Unknown (ID: 2120882761)`。它可能是未在 SeAT 本地缓存的外部角色，也可能是军团或联盟；成员低价合同的 issuer / assignee / acceptor 快照也可能包含该类实体。该功能只补全实体显示名称和已确认角色的当前 affiliation，不解析星系、空间站、建筑或任何合同物理位置。
 
 **触发方式**（任一即可，admin 权限）：
 
-- Web 界面：违规记录页右上角 **解析未知来源** 按钮。任务异步入 Horizon 队列，几秒~几十秒后刷新页面可见结果。
+- Web 界面：违规记录页或军团审计页的 **解析未知来源** 按钮。任务异步入 Horizon 队列，几秒~几十秒后刷新页面可见结果。
 - 命令行：`sudo -u www-data php artisan seat:audit:resolve-unknown-names`（同步执行）。
 
 **工作原理**（三步走，均调 ESI 公开接口，无需 token）：
 
-1. **解析角色名** — `POST /universe/names/` 把所有 Unknown 的 character_id 解析为名字，UPDATE 到 `seat_audit_violations` + UPSERT 到 `universe_names`（SeAT 共用名字缓存）
-2. **解析当前军团** — `POST /characters/affiliation/` 拿到 char→corp 映射，UPSERT 到 `character_affiliations`（让 UI 能 JOIN 出当前军团）
-3. **解析军团名字** — `POST /universe/names/` 把上一步拿到的所有 corp_id 解析为军团名，UPSERT 到 `universe_names`（违规列表「发起方军团/接收方军团」列就能显示外部军团名）
+1. **分类解析实体名** — `POST /universe/names/` 解析顶层和成员合同三方快照中仍为 Unknown 的 ID，并仅替换仍显示 Unknown 的顶层名称；返回类别可以是 character、corporation 或 alliance，名称缓存到 `universe_names`。
+2. **解析确认角色的当前军团** — 仅将已由事件语义、快照 `entity_type=character` 或 names 返回类别确认的角色 ID 发至 `POST /characters/affiliation/`，以 `insertOrIgnore` 写入缺失的 `character_affiliations`，不覆盖 SeAT 已有关系。
+3. **补齐军团 / 联盟名称** — 以双方扫描快照、三方快照和 affiliation 返回的 ID 查询 `corporation_infos` 与 `universe_names`；仅缺失时再由 `/universe/names/` 缓存军团或联盟名称。历史 `character_corporation_id` / `counterparty_corporation_id` 不会回写，modal 的 display_name 只增强显示。
 
 **注意**：
 - ESI 整批包含已注销/无效 ID 时该批可能返回 4xx，本插件按设计跳过失败批次，下次重跑会再试
 - 详细进度看 `storage/logs/laravel.log` 中 `[seat-audit:resolve-unknown]` 前缀
-- 已解析过的 ID 不会重复请求（角色名 WHERE 限定 `LIKE 'Unknown%'`；affiliation/corp 名字会先查 `character_affiliations`/`universe_names` 已有的跳过）
+- 已解析的顶层名称不会重复进入 Unknown 名称查询；affiliation、军团和联盟名称会先查 `character_affiliations` / `corporation_infos` / `universe_names`，已有缓存尽量跳过。
 - 外部军团目前只能拿到 name 没有 ticker（ESI 单调用慢，未做 ticker fallback），UI 显示军团名而非 ticker
 
 ### 6. 配置定时自动扫描（可选）

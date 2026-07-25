@@ -1,11 +1,9 @@
 <?php
 
 // src/Jobs/ResolveUnknownNamesJob.php
-// 解析外部 character_id 的姓名 + 当前所属军团 + 军团名字，并回填到本地 SeAT 数据：
-//  - violations.character_name / counterparty_name（角色名快照）
-//  - universe_names（角色和军团名字缓存，SeAT 自身使用的表）
-//  - character_affiliations（角色 → 军团映射，SeAT 自身使用的表）
-// 触发方式：UI「解析未知来源」按钮（异步入 Horizon）或 Artisan seat:audit:resolve-unknown-names
+// 批量解析审计记录中的 Unknown 实体名称、角色当前 affiliation 及军团/联盟名称。
+// 触发方式：旧违规记录或军团审计页面的「解析未知来源」按钮（异步入 Horizon），
+// 或 Artisan seat:audit:resolve-unknown-names（同步执行）。
 
 namespace Seat\SeatAuditMonitor\Jobs;
 
@@ -23,248 +21,396 @@ class ResolveUnknownNamesJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /**
-     * ESI 接口单批 ID 上限
-     */
-    const ESI_BATCH_SIZE = 1000;
+    /** ESI 接口单批 ID 上限。 */
+    private const ESI_BATCH_SIZE = 1000;
 
-    const ESI_NAMES_ENDPOINT       = 'https://esi.evetech.net/latest/universe/names/';
-    const ESI_AFFILIATION_ENDPOINT = 'https://esi.evetech.net/latest/characters/affiliation/';
+    private const ESI_NAMES_ENDPOINT       = 'https://esi.evetech.net/latest/universe/names/';
+    private const ESI_AFFILIATION_ENDPOINT = 'https://esi.evetech.net/latest/characters/affiliation/';
 
-    const LOG_PREFIX = '[seat-audit:resolve-unknown]';
+    private const LOG_PREFIX = '[seat-audit:resolve-unknown]';
 
-    public function handle()
+    public function handle(): void
     {
-        // ============ 步骤 1：收集所有未解析的 character_id ============
-        // 包括 character_name 和 counterparty_name 仍是 'Unknown (ID:%' 的行
-        $charIds = DB::table('seat_audit_violations')
-            ->where('character_name', 'LIKE', 'Unknown (ID:%')
-            ->whereNotNull('character_id')
-            ->pluck('character_id')
-            ->toArray();
+        // 第一步仅处理真的仍为 Unknown 的实体名称。/universe/names/ 会返回角色、军团或联盟类别，
+        // 所以不能沿用旧逻辑假定 counterparty_id 一定是角色。
+        $unknownEntityIds = $this->unknownTopLevelEntityIds();
+        [$resolvedEntityNames, $resolvedEntityCategories, $failedNameBatches] = $this->resolveUnknownEntityNames($unknownEntityIds);
 
-        $counterpartyIds = DB::table('seat_audit_violations')
-            ->where('counterparty_name', 'LIKE', 'Unknown (ID:%')
-            ->whereNotNull('counterparty_id')
-            ->pluck('counterparty_id')
-            ->toArray();
+        // 除名称解析外，军团列表还需要补全参与者军团名称。这里从旧合同和 2.0 的两种事件
+        // 收集“已由来源语义或快照类型确认的角色”，并收集扫描时写入的军团 ID 快照。未知 ID
+        // 只有被 names endpoint 识别为 character 后才允许进入 affiliation endpoint。
+        $participants = $this->collectAuditParticipants();
+        foreach ($resolvedEntityCategories as $entityId => $category) {
+            if ($category === 'character') {
+                $participants['character_ids'][$entityId] = true;
+            }
+        }
 
-        $charactersNeedingNameResolve = array_values(array_unique(array_filter(
-            array_merge($charIds, $counterpartyIds),
-            fn ($id) => $id > 0
-        )));
+        $characterIds = array_keys($participants['character_ids']);
+        $existingAffiliations = $this->existingAffiliations($characterIds);
+        $charactersNeedingAffiliation = array_values(array_diff($characterIds, array_keys($existingAffiliations)));
+        [$resolvedAffiliations, $failedAffiliationBatches] = $this->resolveAffiliations($charactersNeedingAffiliation);
 
-        // ============ 步骤 2：另外收集所有合同行涉及的角色（用于解析他们的 affiliation） ============
-        // 即使角色名已经解析（character_name 已是真实姓名），他们可能还没在 character_affiliations 里——
-        // 没 affiliation 则 UI 显示不出军团。这里把所有合同行的 issuer + acceptor 都纳入 affiliation 解析。
-        $contractParticipantIds = DB::table('seat_audit_violations')
-            ->where('audit_type', AuditType::Contracts->value)
-            ->select('character_id', 'counterparty_id')
-            ->get()
-            ->flatMap(fn ($r) => [$r->character_id, $r->counterparty_id])
-            ->filter(fn ($id) => $id !== null && $id > 0)
-            ->unique()
-            ->values()
-            ->toArray();
+        // 现有 affiliation 和本次 ESI 返回的 affiliation 都可为页面补全军团名；同时纳入 2.0
+        // 违规记录和合同快照中的历史军团 ID。只缓存名字，不回写 violation 的历史军团快照字段。
+        $corporationAndAllianceIds = $participants['corporation_and_alliance_ids'];
+        foreach ($existingAffiliations as $affiliation) {
+            $corporationAndAllianceIds[$affiliation['corporation_id']] = true;
+            if ($affiliation['alliance_id'] !== null) {
+                $corporationAndAllianceIds[$affiliation['alliance_id']] = true;
+            }
+        }
+        foreach ($resolvedAffiliations as $affiliation) {
+            $corporationAndAllianceIds[$affiliation['corporation_id']] = true;
+            if ($affiliation['alliance_id'] !== null) {
+                $corporationAndAllianceIds[$affiliation['alliance_id']] = true;
+            }
+        }
 
-        // 过滤掉已有 affiliation 行的角色，避免重复 ESI 调用
-        $existingAffiliations = empty($contractParticipantIds)
-            ? []
-            : DB::table('character_affiliations')
-                ->whereIn('character_id', $contractParticipantIds)
-                ->pluck('character_id')
-                ->toArray();
-
-        $charactersNeedingAffiliationResolve = array_values(array_diff(
-            $contractParticipantIds,
-            $existingAffiliations
-        ));
-
-        // 合并：需要解析名字 或 需要解析 affiliation 的所有角色 ID
-        $allCharactersToResolve = array_values(array_unique(array_merge(
-            $charactersNeedingNameResolve,
-            $charactersNeedingAffiliationResolve
-        )));
-
-        // 不在这里 early return：即使前两类都为空，步骤 4.5 仍可能补全已存在 affiliation 行的 corp 名字。
-        // 各步骤内部对空数组都是 no-op，安全。
-
-        Log::info(
-            self::LOG_PREFIX . ' 名字待解析：' . count($charactersNeedingNameResolve)
-            . '；affiliation 待解析：' . count($charactersNeedingAffiliationResolve)
-            . '；合同参与者总数：' . count($contractParticipantIds)
+        [$resolvedCorporationNames, $failedCorporationNameBatches] = $this->resolveCorporationAndAllianceNames(
+            array_keys($corporationAndAllianceIds),
         );
 
-        // ============ 步骤 3：批量解析角色名（POST /universe/names/） ============
-        // 同时把 character 名字 UPSERT 到 universe_names 表（SeAT 共用缓存）
-        $resolvedNameCount = 0;
-        $failedNameBatch = 0;
-
-        foreach (array_chunk($charactersNeedingNameResolve, self::ESI_BATCH_SIZE) as $batch) {
-            $data = $this->postEsi(self::ESI_NAMES_ENDPOINT, array_values($batch), 'names');
-
-            if ($data === null) {
-                $failedNameBatch++;
-                continue;
-            }
-
-            foreach ($data as $item) {
-                if (($item['category'] ?? null) !== 'character') {
-                    continue;
-                }
-                $id = $item['id'] ?? null;
-                $name = $item['name'] ?? null;
-                if (!$id || !is_string($name) || $name === '') {
-                    continue;
-                }
-
-                // UPDATE violations 角色名快照（保留 LIKE 'Unknown%' 限制避免覆盖已正常名字）
-                $a = DB::table('seat_audit_violations')
-                    ->where('character_id', $id)
-                    ->where('character_name', 'LIKE', 'Unknown (ID:%')
-                    ->update(['character_name' => $name]);
-                $b = DB::table('seat_audit_violations')
-                    ->where('counterparty_id', $id)
-                    ->where('counterparty_name', 'LIKE', 'Unknown (ID:%')
-                    ->update(['counterparty_name' => $name]);
-
-                if ($a > 0 || $b > 0) {
-                    $resolvedNameCount++;
-                }
-
-                // 把名字 UPSERT 到 universe_names（SeAT 共用名字缓存）
-                $this->upsertUniverseName($id, $name, 'character');
-            }
-        }
-
-        // ============ 步骤 4：批量解析 affiliation（POST /characters/affiliation/） ============
-        // 拿到 char → corp_id 映射，UPSERT 到 character_affiliations；同时收集所有 corp_id 供下一步解析名字
-        $resolvedAffCount = 0;
-        $failedAffBatch = 0;
-        $allCorpIds = [];
-
-        foreach (array_chunk($allCharactersToResolve, self::ESI_BATCH_SIZE) as $batch) {
-            $data = $this->postEsi(self::ESI_AFFILIATION_ENDPOINT, array_values($batch), 'affiliation');
-
-            if ($data === null) {
-                $failedAffBatch++;
-                continue;
-            }
-
-            foreach ($data as $item) {
-                $characterId = $item['character_id'] ?? null;
-                $corpId      = $item['corporation_id'] ?? null;
-                $allianceId  = $item['alliance_id'] ?? null;
-                $factionId   = $item['faction_id'] ?? null;
-
-                if (!$characterId || !$corpId) {
-                    continue;
-                }
-
-                // UPSERT character_affiliations
-                // 不动现有行的 updated_at（避免覆盖 SeAT 自己更新的时间戳）：仅在不存在时插入
-                $exists = DB::table('character_affiliations')
-                    ->where('character_id', $characterId)
-                    ->exists();
-
-                if (!$exists) {
-                    DB::table('character_affiliations')->insert([
-                        'character_id'   => $characterId,
-                        'corporation_id' => $corpId,
-                        'alliance_id'    => $allianceId,
-                        'faction_id'     => $factionId,
-                        'created_at'     => now(),
-                        'updated_at'     => now(),
-                    ]);
-                    $resolvedAffCount++;
-                }
-
-                $allCorpIds[] = (int) $corpId;
-                if ($allianceId) {
-                    $allCorpIds[] = (int) $allianceId; // 联盟也一起解析名字，未来 UI 可能用到
-                }
-            }
-        }
-
-        $allCorpIds = array_values(array_unique($allCorpIds));
-
-        // ============ 步骤 4.5：补全 — 收集所有合同涉及角色的 corp_id（即使 affiliation 早已存在） ============
-        // 修复 bug：SeAT 自身可能早就同步过外部角色的 affiliation（如 cgwang SkyCity 在 2026-02 同步过），
-        // 此时步骤 4 跳过这些角色 → 他们所属的外部 corp_id 不进 $allCorpIds → 步骤 5 不会去解析这些 corp 的名字。
-        // 这里直接从 character_affiliations 拉本批所有合同参与者的当前 corp_id 补回来。
-        if (!empty($contractParticipantIds)) {
-            $allExistingCorpIds = DB::table('character_affiliations')
-                ->whereIn('character_id', $contractParticipantIds)
-                ->pluck('corporation_id')
-                ->toArray();
-            $allCorpIds = array_values(array_unique(array_merge($allCorpIds, $allExistingCorpIds)));
-        }
-
-        // ============ 步骤 5：批量解析军团/联盟名字（POST /universe/names/） ============
-        // 排除 universe_names 已有 + corporation_infos 已有（SeAT 内部 corp），减少不必要的 ESI 调用
-        $existingCorpInUniverseNames = empty($allCorpIds)
-            ? []
-            : DB::table('universe_names')
-                ->whereIn('entity_id', $allCorpIds)
-                ->whereIn('category', ['corporation', 'alliance'])
-                ->pluck('entity_id')
-                ->toArray();
-
-        $existingCorpInInfos = empty($allCorpIds)
-            ? []
-            : DB::table('corporation_infos')
-                ->whereIn('corporation_id', $allCorpIds)
-                ->pluck('corporation_id')
-                ->toArray();
-
-        $corpsNeedingName = array_values(array_diff(
-            $allCorpIds,
-            $existingCorpInUniverseNames,
-            $existingCorpInInfos
-        ));
-        $resolvedCorpCount = 0;
-        $failedCorpBatch = 0;
-
-        foreach (array_chunk($corpsNeedingName, self::ESI_BATCH_SIZE) as $batch) {
-            $data = $this->postEsi(self::ESI_NAMES_ENDPOINT, array_values($batch), 'corp-names');
-
-            if ($data === null) {
-                $failedCorpBatch++;
-                continue;
-            }
-
-            foreach ($data as $item) {
-                $category = $item['category'] ?? null;
-                if (!in_array($category, ['corporation', 'alliance'], true)) {
-                    continue;
-                }
-                $id = $item['id'] ?? null;
-                $name = $item['name'] ?? null;
-                if (!$id || !is_string($name) || $name === '') {
-                    continue;
-                }
-
-                $this->upsertUniverseName($id, $name, $category);
-                $resolvedCorpCount++;
-            }
-        }
-
-        Log::info(
-            self::LOG_PREFIX . ' 解析完成。角色名 ' . $resolvedNameCount
-            . '；新增 affiliation ' . $resolvedAffCount
-            . '；军团/联盟名字 ' . $resolvedCorpCount
-            . '；失败批次 names=' . $failedNameBatch
-            . ' affiliation=' . $failedAffBatch
-            . ' corp-names=' . $failedCorpBatch
-        );
+        Log::info(self::LOG_PREFIX . ' 解析完成。', [
+            'unknown_entity_candidates' => count($unknownEntityIds),
+            'resolved_top_level_names' => count($resolvedEntityNames),
+            'confirmed_character_participants' => count($characterIds),
+            'new_affiliations' => count($resolvedAffiliations),
+            'resolved_corporation_or_alliance_names' => $resolvedCorporationNames,
+            'failed_name_batches' => $failedNameBatches,
+            'failed_affiliation_batches' => $failedAffiliationBatches,
+            'failed_corporation_name_batches' => $failedCorporationNameBatches,
+        ]);
     }
 
     /**
-     * 统一调用 ESI POST 接口；失败返回 null，调用方按整批跳过
+     * 收集顶层名称仍是 Unknown 的实体 ID。
+     *
+     * character_* 对旧 1.0 和 2.0 通常是角色，counterparty_* 在军团审计中却可能是角色、军团
+     * 或联盟。统一交给 ESI names endpoint 分类后再决定是否查询 affiliation。
+     *
+     * @return array<int, int>
+     */
+    private function unknownTopLevelEntityIds(): array
+    {
+        $entityIds = [];
+
+        foreach (DB::table('seat_audit_violations')
+            ->where('character_name', 'LIKE', 'Unknown (ID:%')
+            ->whereNotNull('character_id')
+            ->pluck('character_id') as $entityId) {
+            $normalized = $this->positiveInteger($entityId);
+            if ($normalized !== null) {
+                $entityIds[$normalized] = $normalized;
+            }
+        }
+
+        foreach (DB::table('seat_audit_violations')
+            ->where('counterparty_name', 'LIKE', 'Unknown (ID:%')
+            ->whereNotNull('counterparty_id')
+            ->pluck('counterparty_id') as $entityId) {
+            $normalized = $this->positiveInteger($entityId);
+            if ($normalized !== null) {
+                $entityIds[$normalized] = $normalized;
+            }
+        }
+
+        // member_contracts 的 assignee 不一定写在顶层；若其实体快照仍是 Unknown，也一并交给
+        // names endpoint。这里不会把 details 当作指令执行，只安全提取固定键和正整数 ID。
+        foreach (DB::table('seat_audit_violations')
+            ->where('audit_type', AuditType::MemberContracts->value)
+            ->select('details')
+            ->cursor() as $violation) {
+            foreach ($this->partySnapshots($violation->details ?? null) as $party) {
+                $entityId = $this->positiveInteger($party['id'] ?? null);
+                $name = trim((string) ($party['name'] ?? ''));
+                if ($entityId !== null && str_starts_with($name, 'Unknown (ID:')) {
+                    $entityIds[$entityId] = $entityId;
+                }
+            }
+        }
+
+        return array_values($entityIds);
+    }
+
+    /**
+     * 调用 names endpoint，更新顶层 Unknown 名称并缓存 entity category。
+     *
+     * @param array<int, int> $entityIds
+     * @return array{0: array<int, string>, 1: array<int, string>, 2: int}
+     */
+    private function resolveUnknownEntityNames(array $entityIds): array
+    {
+        $resolvedNames = [];
+        $resolvedCategories = [];
+        $failedBatches = 0;
+
+        foreach (array_chunk($entityIds, self::ESI_BATCH_SIZE) as $batch) {
+            $data = $this->postEsi(self::ESI_NAMES_ENDPOINT, $batch, 'entity-names');
+            if ($data === null) {
+                $failedBatches++;
+                continue;
+            }
+
+            foreach ($data as $item) {
+                $entityId = $this->positiveInteger($item['id'] ?? null);
+                $name = $item['name'] ?? null;
+                $category = $item['category'] ?? null;
+                if ($entityId === null
+                    || ! is_string($name)
+                    || trim($name) === ''
+                    || ! in_array($category, ['character', 'corporation', 'alliance'], true)) {
+                    continue;
+                }
+
+                // 仅替换仍为 Unknown 的顶层快照，保留已经记录的正常名字，避免 ESI 延迟或实体
+                // 重名导致历史审计表被意外覆盖。无论类别为何都允许更新：2.0 外部方可以是军团/联盟。
+                DB::table('seat_audit_violations')
+                    ->where('character_id', $entityId)
+                    ->where('character_name', 'LIKE', 'Unknown (ID:%')
+                    ->update(['character_name' => $name]);
+                DB::table('seat_audit_violations')
+                    ->where('counterparty_id', $entityId)
+                    ->where('counterparty_name', 'LIKE', 'Unknown (ID:%')
+                    ->update(['counterparty_name' => $name]);
+
+                $this->upsertUniverseName($entityId, $name, $category);
+                $resolvedNames[$entityId] = $name;
+                $resolvedCategories[$entityId] = $category;
+            }
+        }
+
+        return [$resolvedNames, $resolvedCategories, $failedBatches];
+    }
+
+    /**
+     * 从所有可显示审计类型收集确认的角色参与者和军团/联盟快照 ID。
+     *
+     * @return array{
+     *     character_ids: array<int, true>,
+     *     corporation_and_alliance_ids: array<int, true>
+     * }
+     */
+    private function collectAuditParticipants(): array
+    {
+        $characterIds = [];
+        $corporationAndAllianceIds = [];
+
+        DB::table('seat_audit_violations')
+            ->whereIn('audit_type', [
+                AuditType::Contracts->value,
+                AuditType::IskDonations->value,
+                AuditType::MemberContracts->value,
+            ])
+            ->select([
+                'audit_type',
+                'character_id',
+                'counterparty_id',
+                'external_party_type',
+                'character_corporation_id',
+                'counterparty_corporation_id',
+                'details',
+            ])
+            ->orderBy('id')
+            ->cursor()
+            ->each(function (object $violation) use (&$characterIds, &$corporationAndAllianceIds): void {
+                $memberOrIssuerId = $this->positiveInteger($violation->character_id ?? null);
+                if ($memberOrIssuerId !== null) {
+                    // 旧 Contracts 的 issuer/acceptor 都是 character；2.0 character_id 固定为成员角色。
+                    $characterIds[$memberOrIssuerId] = true;
+                }
+
+                $counterpartyId = $this->positiveInteger($violation->counterparty_id ?? null);
+                if ($counterpartyId !== null) {
+                    if ($violation->audit_type === AuditType::Contracts->value
+                        || $violation->external_party_type === 'character') {
+                        $characterIds[$counterpartyId] = true;
+                    }
+                }
+
+                foreach ([$violation->character_corporation_id ?? null, $violation->counterparty_corporation_id ?? null] as $corporationId) {
+                    $normalized = $this->positiveInteger($corporationId);
+                    if ($normalized !== null) {
+                        $corporationAndAllianceIds[$normalized] = true;
+                    }
+                }
+
+                // member_contracts 保存 issuer / assignee / acceptor 对象；Donation 的 donor / recipient
+                // 也使用同一快照对象格式。只信任 entity_type=character 的对象进入 affiliation 接口。
+                foreach ($this->partySnapshots($violation->details ?? null) as $party) {
+                    $entityId = $this->positiveInteger($party['id'] ?? null);
+                    if ($entityId !== null && ($party['entity_type'] ?? null) === 'character') {
+                        $characterIds[$entityId] = true;
+                    }
+                    $corporationId = $this->positiveInteger($party['corporation_id'] ?? null);
+                    if ($corporationId !== null) {
+                        $corporationAndAllianceIds[$corporationId] = true;
+                    }
+                }
+            });
+
+        return [
+            'character_ids' => $characterIds,
+            'corporation_and_alliance_ids' => $corporationAndAllianceIds,
+        ];
+    }
+
+    /**
+     * @param array<int, int> $characterIds
+     * @return array<int, array{corporation_id: int, alliance_id: ?int}>
+     */
+    private function existingAffiliations(array $characterIds): array
+    {
+        if ($characterIds === []) {
+            return [];
+        }
+
+        return DB::table('character_affiliations')
+            ->whereIn('character_id', $characterIds)
+            ->select('character_id', 'corporation_id', 'alliance_id')
+            ->get()
+            ->mapWithKeys(function (object $affiliation): array {
+                return [(int) $affiliation->character_id => [
+                    'corporation_id' => (int) $affiliation->corporation_id,
+                    'alliance_id' => $this->positiveInteger($affiliation->alliance_id ?? null),
+                ]];
+            })
+            ->all();
+    }
+
+    /**
+     * 只将已确认的角色提交给 affiliation endpoint，避免把军团/联盟 ID 误当角色 ID 请求 ESI。
+     *
+     * @param array<int, int> $characterIds
+     * @return array<int, array{corporation_id: int, alliance_id: ?int}>
+     */
+    private function resolveAffiliations(array $characterIds): array
+    {
+        $affiliations = [];
+        $failedBatches = 0;
+
+        foreach (array_chunk($characterIds, self::ESI_BATCH_SIZE) as $batch) {
+            $data = $this->postEsi(self::ESI_AFFILIATION_ENDPOINT, $batch, 'affiliation');
+            if ($data === null) {
+                $failedBatches++;
+                continue;
+            }
+
+            foreach ($data as $item) {
+                $characterId = $this->positiveInteger($item['character_id'] ?? null);
+                $corporationId = $this->positiveInteger($item['corporation_id'] ?? null);
+                $allianceId = $this->positiveInteger($item['alliance_id'] ?? null);
+                $factionId = $this->positiveInteger($item['faction_id'] ?? null);
+                if ($characterId === null || $corporationId === null) {
+                    continue;
+                }
+
+                // 不更新既有 affiliation，避免覆盖 SeAT 自己的同步时间线；insertOrIgnore 同时吸收
+                // 两个管理员近乎同时提交解析任务时的竞争，仍让本批取得军团 ID 以补全名称缓存。
+                DB::table('character_affiliations')->insertOrIgnore([
+                    'character_id' => $characterId,
+                    'corporation_id' => $corporationId,
+                    'alliance_id' => $allianceId,
+                    'faction_id' => $factionId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+                $affiliations[$characterId] = [
+                    'corporation_id' => $corporationId,
+                    'alliance_id' => $allianceId,
+                ];
+            }
+        }
+
+        return [$affiliations, $failedBatches];
+    }
+
+    /**
+     * 补齐军团或联盟名称。优先信任 SeAT 已有 corporation_infos；未知名称才写入 universe_names。
+     *
+     * @param array<int, int> $entityIds
+     * @return array{0: int, 1: int}
+     */
+    private function resolveCorporationAndAllianceNames(array $entityIds): array
+    {
+        if ($entityIds === []) {
+            return [0, 0];
+        }
+
+        $knownUniverseIds = DB::table('universe_names')
+            ->whereIn('entity_id', $entityIds)
+            ->whereIn('category', ['corporation', 'alliance'])
+            ->pluck('entity_id')
+            ->map(static fn ($entityId): int => (int) $entityId)
+            ->all();
+        $knownCorporationIds = DB::table('corporation_infos')
+            ->whereIn('corporation_id', $entityIds)
+            ->pluck('corporation_id')
+            ->map(static fn ($entityId): int => (int) $entityId)
+            ->all();
+        $idsToResolve = array_values(array_diff($entityIds, $knownUniverseIds, $knownCorporationIds));
+
+        $resolvedCount = 0;
+        $failedBatches = 0;
+        foreach (array_chunk($idsToResolve, self::ESI_BATCH_SIZE) as $batch) {
+            $data = $this->postEsi(self::ESI_NAMES_ENDPOINT, $batch, 'corporation-alliance-names');
+            if ($data === null) {
+                $failedBatches++;
+                continue;
+            }
+
+            foreach ($data as $item) {
+                $entityId = $this->positiveInteger($item['id'] ?? null);
+                $name = $item['name'] ?? null;
+                $category = $item['category'] ?? null;
+                if ($entityId === null
+                    || ! is_string($name)
+                    || trim($name) === ''
+                    || ! in_array($category, ['corporation', 'alliance'], true)) {
+                    continue;
+                }
+
+                $this->upsertUniverseName($entityId, $name, $category);
+                $resolvedCount++;
+            }
+        }
+
+        return [$resolvedCount, $failedBatches];
+    }
+
+    /**
+     * 把 Donation 的 donor/recipient 或成员合同的 issuer/assignee/acceptor 快照统一为安全数组。
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function partySnapshots(mixed $details): array
+    {
+        $decoded = $this->detailsArray($details);
+        $parties = $decoded['parties'] ?? [];
+        if (! is_array($parties)) {
+            return [];
+        }
+
+        $snapshots = [];
+        foreach (['issuer', 'assignee', 'acceptor', 'donor', 'recipient'] as $key) {
+            if (isset($parties[$key]) && is_array($parties[$key])) {
+                $snapshots[] = $parties[$key];
+            }
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * 统一调用 ESI POST 接口；失败返回 null，调用方按整批跳过并记录统计。
+     *
+     * @param array<int, int> $payload
+     * @return array<int, array<string, mixed>>|null
      */
     private function postEsi(string $endpoint, array $payload, string $tag): ?array
     {
-        if (empty($payload)) {
+        if ($payload === []) {
             return [];
         }
 
@@ -273,22 +419,25 @@ class ResolveUnknownNamesJob implements ShouldQueue
                 ->acceptJson()
                 ->asJson()
                 ->post($endpoint, array_values($payload));
-        } catch (\Throwable $e) {
-            Log::warning(self::LOG_PREFIX . ' [' . $tag . '] HTTP 异常：' . $e->getMessage());
+        } catch (\Throwable $exception) {
+            Log::warning(self::LOG_PREFIX . ' [' . $tag . '] HTTP 异常：' . $exception->getMessage());
+
             return null;
         }
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             Log::warning(
                 self::LOG_PREFIX . ' [' . $tag . '] 状态 ' . $response->status()
                 . '，body：' . mb_substr((string) $response->body(), 0, 500)
             );
+
             return null;
         }
 
         $data = $response->json();
-        if (!is_array($data)) {
+        if (! is_array($data)) {
             Log::warning(self::LOG_PREFIX . ' [' . $tag . '] 响应不是数组');
+
             return null;
         }
 
@@ -296,25 +445,48 @@ class ResolveUnknownNamesJob implements ShouldQueue
     }
 
     /**
-     * UPSERT 一条 universe_names 行。
-     * 已存在的不动（避免影响 SeAT 自身更新轨迹），仅 INSERT 新行。
+     * 插入 SeAT universe_names 缓存；已有数据不覆盖，避免干扰 SeAT 原生同步轨迹。
      */
     private function upsertUniverseName(int $entityId, string $name, string $category): void
     {
         $exists = DB::table('universe_names')
             ->where('entity_id', $entityId)
             ->exists();
-
         if ($exists) {
             return;
         }
 
         DB::table('universe_names')->insert([
-            'entity_id'  => $entityId,
-            'name'       => $name,
-            'category'   => $category,
+            'entity_id' => $entityId,
+            'name' => $name,
+            'category' => $category,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    /** @return array<string, mixed> */
+    private function detailsArray(mixed $details): array
+    {
+        if (is_array($details)) {
+            return $details;
+        }
+        if (! is_string($details) || $details === '') {
+            return [];
+        }
+
+        $decoded = json_decode($details, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function positiveInteger(mixed $value): ?int
+    {
+        $normalized = trim((string) ($value ?? ''));
+        if (preg_match('/^[1-9][0-9]*$/', $normalized) !== 1) {
+            return null;
+        }
+
+        return (int) $normalized;
     }
 }
