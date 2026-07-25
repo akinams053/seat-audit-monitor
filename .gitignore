@@ -2,5 +2,10 @@
 scripts/all.key
 .DS_Store
 .claude/settings.local.json
+/.claude/worktrees/
+/seat排查简易.xlsx
+/令牌审查范例1.png
+/令牌审查范例2.png
+/令牌审查范例3.png
 __pycache__/
 *.pyc
